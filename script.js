@@ -1,1101 +1,907 @@
+/**
+ * AeroCAD — Aerospace Conceptual CAD Tool
+ * script.js: Three.js 3D engine, NACA math, parametric geometry,
+ *            mass properties, STL export, and backend API integration.
+ *
+ * Coordinate convention (world space):
+ *   X+ = right (span direction)
+ *   Y+ = up   (vertical / dihedral lift)
+ *   Z+ = aft  (tail direction, nose at -Z)
+ */
+
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { STLExporter } from 'three/addons/exporters/STLExporter.js';
+import { OrbitControls }  from 'three/addons/controls/OrbitControls.js';
+import { STLExporter }    from 'three/addons/exporters/STLExporter.js';
 
-// ─── Renderer / Scene / Camera ────────────────────────────────────────────────
-const canvas = document.getElementById('viewport');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. CONSTANTS & STATE
+// ─────────────────────────────────────────────────────────────────────────────
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0d0f14);
-scene.fog = new THREE.FogExp2(0x0d0f14, 0.004);
+const API_BASE = 'http://localhost:8000';
 
-const camera = new THREE.PerspectiveCamera(52, 1, 0.1, 2000);
-camera.position.set(30, 14, 48);
-
-const controls = new OrbitControls(camera, canvas);
-controls.enableDamping = true;
-controls.dampingFactor = 0.06;
-controls.minDistance = 1;
-controls.maxDistance = 600;
-
-// ─── Lighting ─────────────────────────────────────────────────────────────────
-scene.add(new THREE.AmbientLight(0x1a2040, 1.4));
-
-const sun = new THREE.DirectionalLight(0xffffff, 2.8);
-sun.position.set(40, 60, 30);
-sun.castShadow = true;
-Object.assign(sun.shadow, { mapSize: new THREE.Vector2(2048, 2048) });
-Object.assign(sun.shadow.camera, { left: -100, right: 100, top: 80, bottom: -80, near: 0.1, far: 300 });
-scene.add(sun);
-
-const fill = new THREE.DirectionalLight(0x0044ff, 0.6);
-fill.position.set(-30, 10, -20);
-scene.add(fill);
-
-const rim = new THREE.PointLight(0x00e5ff, 1.5, 200);
-rim.position.set(-10, 30, -10);
-scene.add(rim);
-
-// Grid + Axes
-const grid = new THREE.GridHelper(300, 60, 0x1a2040, 0x141820);
-scene.add(grid);
-const axes = new THREE.AxesHelper(10);
-axes.position.set(-70, 0.02, -70);
-scene.add(axes);
-
-// ─── Materials Config ──────────────────────────────────────────────────────────
-const MAT_PROPS = {
-  aluminum:  { density: 2810,  color: 0x8ab4d4, roughness: 0.20, metalness: 0.90 },
-  titanium:  { density: 4430,  color: 0xa0a8b0, roughness: 0.30, metalness: 0.85 },
-  carbon:    { density: 1600,  color: 0x2a2d35, roughness: 0.55, metalness: 0.10 },
-  steel:     { density: 7850,  color: 0x888888, roughness: 0.35, metalness: 0.92 },
-  inconel:   { density: 8190,  color: 0x7a6f6a, roughness: 0.28, metalness: 0.88 },
-  magnesium: { density: 1770,  color: 0xb8c0a0, roughness: 0.40, metalness: 0.70 },
-};
-const MAT_NAMES = {
-  aluminum:'Al 7075', titanium:'Ti Gr.5', carbon:'CFRP',
-  steel:'St 4340', inconel:'IN 718', magnesium:'Mg AZ31',
+const MATERIALS = {
+  aluminum:    { name: 'Aluminum 7075',        density: 2810, color: 0xb0b8c8 },
+  titanium:    { name: 'Titanium Grade 5',     density: 4430, color: 0x8b8a7a },
+  carbonFiber: { name: 'Carbon Fiber Composite', density: 1600, color: 0x2a2e38 },
 };
 
-// Mesh material factory
-function makeMat(key, { transparent = false, opacity = 1, wireframe = false } = {}) {
-  const p = MAT_PROPS[key] || MAT_PROPS.aluminum;
-  return new THREE.MeshStandardMaterial({
-    color: p.color, roughness: p.roughness, metalness: p.metalness,
-    transparent, opacity, wireframe, depthWrite: !transparent,
-  });
-}
-const canopyMat = new THREE.MeshPhysicalMaterial({
-  color: 0x88ccff, roughness: 0.05, metalness: 0, transmission: 0.82,
-  transparent: true, opacity: 0.35, envMapIntensity: 1.5, side: THREE.DoubleSide,
-});
-
-// ─── State ─────────────────────────────────────────────────────────────────────
-const state = {
-  // Fuselage
-  fuseLength: 20, fuseDiameter: 2.5, fuseNose: 2, fuseTaper: 0.4,
-  // Canopy
-  canopyShow: true, canopyLength: 3, canopyWidth: 1.4, canopyHeight: 0.9,
-  // Main wings
-  nacaCode: '2412', wingSpan: 30, wingChord: 3.5, wingTaper: 0.45,
-  wingSweep: 25, wingDihedral: 5, wingPos: 38,
-  // Winglets
-  wingletsShow: false, wingletHeight: 2, wingletCant: 75, wingletSweep: 35,
-  // H-Stab
-  hstabSpan: 8, hstabChord: 1.5, hstabSweep: 30, hstabDihedral: 3,
-  // V-Stab
-  vstabHeight: 4, vstabChord: 2.5, vstabSweep: 40, vstabTaper: 0.35,
-  // Engines
-  engineCount: 2, enginePos: 'underwing',
-  engineDiameter: 1.2, engineLength: 4, engineSpanPos: 35,
-  // Landing gear
-  gearShow: true, gearType: 'tricycle', gearStrut: 1.2, gearRadius: 0.4,
-  // Material & view
-  material: 'aluminum', viewMode: 'solid',
+/** Live parametric state — single source of truth */
+let p = {
+  naca:              '2412',
+  wingspan:          10,
+  chord:             2,
+  taperRatio:        1.0,
+  sweep:             15,
+  dihedral:          5,
+  twistAngle:        0,
+  fuseLength:        8,
+  fuseDiam:          1.2,
+  noseConeSharpness: 2,
+  material:          'aluminum',
 };
 
-// Mesh registry for visibility and view-mode toggling
-const meshGroups = {
-  fuselage: [], canopy: [], wings: [], winglets: [],
-  hstab: [], vstab: [], engines: [], gear: [], cog: [],
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. THREE.JS SCENE GLOBALS
+// ─────────────────────────────────────────────────────────────────────────────
 
-function registerMesh(key, mesh) {
-  meshGroups[key].push(mesh);
-  scene.add(mesh);
-}
+let scene, camera, renderer, controls;
+let wingMeshLeft, wingMeshRight, fuseMesh, cogMarker;
+let gridHelper;
+let sceneGroup;           // parent group for all geometry
+let wireframeMode = false;
 
-function disposeMeshGroup(key) {
-  for (const m of meshGroups[key]) {
-    m.geometry?.dispose();
-    if (Array.isArray(m.material)) m.material.forEach(x => x.dispose());
-    else m.material?.dispose();
-    scene.remove(m);
+const wingMat  = new THREE.MeshPhongMaterial({ side: THREE.DoubleSide, shininess: 80 });
+const fuseMat  = new THREE.MeshPhongMaterial({ side: THREE.DoubleSide, shininess: 120 });
+const cogMat   = new THREE.MeshBasicMaterial({ color: 0xffab00, wireframe: true });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. NACA 4-DIGIT AIRFOIL ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute thickness, camber, and slope at normalized chord position x ∈ [0,1].
+ * Returns { yt, yc, dyc_dx, theta } — all normalized (divide by chord to get real coords).
+ */
+function nasoCalc(x, M, P, t) {
+  // NACA 4-digit thickness distribution (open trailing edge)
+  const yt = (t / 0.2) * (
+     0.2969 * Math.sqrt(Math.max(x, 0))
+   - 0.1260 * x
+   - 0.3516 * x * x
+   + 0.2843 * x * x * x
+   - 0.1015 * x * x * x * x
+  );
+
+  let yc, dyc_dx;
+  if (M === 0 || P === 0) {
+    yc = 0; dyc_dx = 0;
+  } else if (x < P) {
+    yc      = (M / (P * P))           * (2 * P * x - x * x);
+    dyc_dx  = (2 * M / (P * P))       * (P - x);
+  } else {
+    yc      = (M / ((1 - P) * (1 - P))) * (1 - 2 * P + 2 * P * x - x * x);
+    dyc_dx  = (2 * M / ((1 - P) * (1 - P))) * (P - x);
   }
-  meshGroups[key] = [];
+
+  const theta = Math.atan(dyc_dx);
+  return { yt, yc, theta };
 }
 
-// Visibility map (true = visible)
-const visibility = {
-  fuselage: true, canopy: true, wings: true, winglets: true,
-  hstab: true, vstab: true, engines: true, gear: true, cog: true,
-};
+/**
+ * Generate full closed airfoil contour for a NACA 4-digit code.
+ * Returns an array of {nx, ny} normalized points tracing:
+ *   upper surface LE → TE, then lower surface TE → LE (closed loop).
+ * @param {string} code  e.g. '2412'
+ * @param {number} N     number of points per surface
+ */
+function generateNACAContour(code, N = 60) {
+  const raw = code.replace(/\s/g, '').padStart(4, '0');
+  const M = parseInt(raw[0]) / 100;           // max camber
+  const P = parseInt(raw[1]) / 10;            // position of max camber
+  const t = parseInt(raw.slice(2)) / 100;     // max thickness
 
-// ─── NACA 4-Digit Profile ─────────────────────────────────────────────────────
-function nacaPoints(code, n = 64) {
-  const m = parseInt(code[0]) / 100;
-  const p = parseInt(code[1]) / 10;
-  const t = parseInt(code.slice(2)) / 100;
-  const up = [], lo = [];
-  for (let i = 0; i <= n; i++) {
-    const x = i / n;
-    const yt = (t / 0.2) * (0.2969 * Math.sqrt(x) - 0.126 * x - 0.3516 * x ** 2 + 0.2843 * x ** 3 - 0.1015 * x ** 4);
-    let yc = 0, dy = 0;
-    if (p > 0) {
-      if (x < p) { yc = (m / p ** 2) * (2 * p * x - x ** 2); dy = (2 * m / p ** 2) * (p - x); }
-      else        { yc = (m / (1 - p) ** 2) * (1 - 2 * p + 2 * p * x - x ** 2); dy = (2 * m / (1 - p) ** 2) * (p - x); }
+  const upper = [];
+  const lower = [];
+
+  for (let i = 0; i <= N; i++) {
+    // Cosine spacing — denser near LE for accuracy
+    const beta = (i / N) * Math.PI;
+    const x    = (1 - Math.cos(beta)) / 2;
+    const { yt, yc, theta } = nasoCalc(x, M, P, t);
+
+    upper.push({ nx: x - yt * Math.sin(theta), ny: yc + yt * Math.cos(theta) });
+    lower.push({ nx: x + yt * Math.sin(theta), ny: yc - yt * Math.cos(theta) });
+  }
+
+  // Full contour: upper (LE→TE) then lower reversed (TE→LE), skip duplicate endpoints
+  const contour = [...upper];
+  for (let i = lower.length - 2; i >= 1; i--) {
+    contour.push(lower[i]);
+  }
+  return contour; // closed polygon, first ≈ last ≈ TE
+}
+
+/**
+ * Calculate approximate cross-sectional area of the airfoil using the
+ * shoelace formula on the normalized contour, multiplied by chord².
+ */
+function airfoilArea(contour, chord) {
+  let area = 0;
+  const n = contour.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    area += contour[i].nx * contour[j].ny;
+    area -= contour[j].nx * contour[i].ny;
+  }
+  return Math.abs(area) / 2 * chord * chord;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. GEOMETRY BUILDERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Build a single half-wing BufferGeometry from the airfoil contour.
+ * @param {Object} params  - current parametric state
+ * @param {number} side    - +1 = right wing, -1 = left wing
+ */
+function buildHalfWingGeometry(params, side) {
+  const contour = generateNACAContour(params.naca, 55);
+  const nPts    = contour.length;
+
+  const halfSpan      = params.wingspan / 2;
+  const rootChord     = params.chord;
+  const tipChord      = rootChord * params.taperRatio;
+  const sweepOffset   = halfSpan * Math.tan(params.sweep * Math.PI / 180);
+  const dihedralDY    = halfSpan * Math.tan(params.dihedral * Math.PI / 180);
+  const twistRad      = params.twistAngle * Math.PI / 180;
+
+  // LE position: place quarter-chord at X=0 along fuselage
+  const rootLE_Z = -rootChord * 0.25;
+  const tipLE_Z  = rootLE_Z + sweepOffset;   // sweep shifts tip LE aft (+Z)
+
+  const positions = [];
+  const indices   = [];
+
+  // Helper: push a vertex in world space
+  // Root profile: at X = 0, chord in Z, thickness in Y
+  const pushRoot = ({ nx, ny }) => {
+    positions.push(
+      0,                         // X (span position)
+      ny * rootChord,            // Y (thickness)
+      nx * rootChord + rootLE_Z  // Z (chord position)
+    );
+  };
+
+  // Tip profile: at X = halfSpan * side, with dihedral, sweep, and geometric twist.
+  // True 2D rotation of the cross-section around the quarter-chord (normalized 0.25).
+  const pushTip = ({ nx, ny }) => {
+    const pivotX = 0.25;                        // quarter-chord pivot (normalized)
+    const effTwist = twistRad * side;           // washout: left/right symmetric
+    const cosT = Math.cos(effTwist);
+    const sinT = Math.sin(effTwist);
+    // Translate so pivot is at origin, rotate in the chord-thickness (XY) plane, translate back
+    const dx  = nx - pivotX;
+    const nxR = dx * cosT - ny * sinT + pivotX; // rotated chord position
+    const nyR = dx * sinT + ny * cosT;           // rotated thickness position
+    positions.push(
+      halfSpan * side,
+      nyR * tipChord + dihedralDY * Math.abs(side),
+      nxR * tipChord + tipLE_Z
+    );
+  };
+
+  // Root vertices: indices 0 … nPts-1
+  for (const pt of contour) pushRoot(pt);
+  // Tip  vertices: indices nPts … 2*nPts-1
+  for (const pt of contour) pushTip(pt);
+
+  // Build triangle strip between root and tip edges (including closing segment).
+  // nPts vertices form a closed loop; connect i → (i+1) % nPts for all i.
+  for (let i = 0; i < nPts; i++) {
+    const r0 = i,             r1 = (i + 1) % nPts;
+    const t0 = nPts + i,      t1 = nPts + (i + 1) % nPts;
+    if (side > 0) {
+      indices.push(r0, r1, t0);
+      indices.push(r1, t1, t0);
+    } else {
+      indices.push(r0, t0, r1);
+      indices.push(r1, t0, t1);
     }
-    const theta = Math.atan(dy);
-    up.push(new THREE.Vector2(x - yt * Math.sin(theta), yc + yt * Math.cos(theta)));
-    lo.push(new THREE.Vector2(x + yt * Math.sin(theta), yc - yt * Math.cos(theta)));
   }
-  return [...up, ...lo.reverse()];
-}
 
-function nacaShape(code, chord) {
-  const pts = nacaPoints(code, 64);
-  const s = new THREE.Shape();
-  s.moveTo(pts[0].x * chord, pts[0].y * chord);
-  for (let i = 1; i < pts.length; i++) s.lineTo(pts[i].x * chord, pts[i].y * chord);
-  s.closePath();
-  return s;
-}
-
-// Generic swept+tapered wing-slab builder → returns [geoR, geoL]
-function buildWingSlab({ shape, chord, tipChordRatio, halfSpan, sweep, dihedral, nacaCode, offset = new THREE.Vector3() }) {
-  const tipChord = chord * tipChordRatio;
-  const sweepRad = THREE.MathUtils.degToRad(sweep);
-  const dihedralRad = THREE.MathUtils.degToRad(dihedral);
-  const sweepOff = halfSpan * Math.tan(sweepRad);
-  const dihedralRise = halfSpan * Math.tan(dihedralRad);
-
-  const shp = shape || nacaShape(nacaCode, chord);
-  const geo = new THREE.ExtrudeGeometry(shp, { steps: 1, depth: halfSpan, bevelEnabled: false });
-  geo.rotateX(Math.PI / 2);
-
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i);
-    const t = Math.max(0, y) / halfSpan;
-    // Taper (scale X toward tip)
-    const xOrig = pos.getX(i);
-    const scale = 1 - t * (1 - tipChordRatio);
-    pos.setX(i, xOrig * scale + t * sweepOff - (chord - chord * scale) * 0.5);
-    pos.setY(i, y);
-    pos.setZ(i, pos.getZ(i) + t * dihedralRise);
+  // Cap the root face — fan triangulation from centroid (all nPts segments, closed).
+  const rootSumX = contour.reduce((s, q) => s + q.nx, 0) / nPts;
+  const rootSumY = contour.reduce((s, q) => s + q.ny, 0) / nPts;
+  const centerIdx = positions.length / 3;
+  positions.push(0, rootSumY * rootChord, rootSumX * rootChord + rootLE_Z);
+  for (let i = 0; i < nPts; i++) {
+    const i1 = (i + 1) % nPts;
+    if (side > 0) {
+      indices.push(centerIdx, i1, i);
+    } else {
+      indices.push(centerIdx, i, i1);
+    }
   }
-  pos.needsUpdate = true;
+
+  // Cap the tip face — fan triangulation from tip centroid (all nPts segments, closed).
+  const tipSumX = contour.reduce((s, q) => s + q.nx, 0) / nPts;
+  const tipSumY = contour.reduce((s, q) => s + q.ny, 0) / nPts;
+  const tipCenterIdx = positions.length / 3;
+  positions.push(halfSpan * side, tipSumY * tipChord + dihedralDY * Math.abs(side), tipSumX * tipChord + tipLE_Z);
+  for (let i = 0; i < nPts; i++) {
+    const i1 = (i + 1) % nPts;
+    if (side > 0) {
+      indices.push(tipCenterIdx, nPts + i, nPts + i1);
+    } else {
+      indices.push(tipCenterIdx, nPts + i1, nPts + i);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setIndex(indices);
   geo.computeVertexNormals();
-  geo.translate(-chord / 2, 0, 0);
-
-  // Mirror for port
-  const geoL = geo.clone();
-  const posL = geoL.attributes.position;
-  for (let i = 0; i < posL.count; i++) posL.setY(i, -posL.getY(i));
-  posL.needsUpdate = true;
-  geoL.computeVertexNormals();
-
-  return [geo, geoL];
+  return geo;
 }
 
-// ─── Component Builders ────────────────────────────────────────────────────────
+/**
+ * Build fuselage geometry using LatheGeometry (body of revolution around Y),
+ * then rotate the mesh to align with the Z axis.
+ * Nose tip at Z = -fuseLength/2, tail at Z = +fuseLength/2.
+ */
+function buildFuselageGeometry(params) {
+  const R        = params.fuseDiam / 2;
+  const L        = params.fuseLength;
+  const S        = Math.max(0.5, params.noseConeSharpness); // fineness ratio
+  const noseLen  = R * 2 * S;  // nose cone length = diameter × fineness
 
-function buildFuselage() {
-  disposeMeshGroup('fuselage');
-  const { fuseLength: L, fuseDiameter, fuseNose, fuseTaper } = state;
-  const r = fuseDiameter / 2;
-  const noseFrac = 0.18, tailFrac = 0.25;
-  const noseLen = L * noseFrac, bodyLen = L * (1 - noseFrac - tailFrac), tailLen = L * tailFrac;
+  const lathePoints = [];
 
-  const pts = [];
-  // Nose
-  for (let i = 0; i <= 20; i++) {
-    const t = i / 20;
-    pts.push(new THREE.Vector2(r * Math.pow(t, 1 / fuseNose), -L / 2 + noseLen * t));
-  }
-  // Body
-  for (let i = 1; i <= 12; i++) {
-    const t = i / 12;
-    pts.push(new THREE.Vector2(r * (1 - 0.04 * t * t), -L / 2 + noseLen + bodyLen * t));
-  }
-  // Tail taper
-  const tailR = r * fuseTaper;
-  for (let i = 1; i <= 16; i++) {
-    const t = i / 16;
-    const rad = r * (1 - 0.04) * (1 - t) + tailR * t;
-    pts.push(new THREE.Vector2(rad, -L / 2 + noseLen + bodyLen + tailLen * t));
+  // Nose tip at local Y = 0
+  lathePoints.push(new THREE.Vector2(0, 0));
+
+  // Nose cone profile — ogive (power-law: r = R * (y/noseLen)^0.5 → rounded
+  // sharpness 0.5 = very blunt, 5 = very sharp
+  const NosePts = 24;
+  for (let i = 1; i <= NosePts; i++) {
+    const t = i / NosePts;
+    const y = t * noseLen;
+    // Exponent: 1/fineness → higher fineness = sharper tip shape
+    const exponent = 0.5 + 0.3 * (S - 0.5);
+    const r = R * Math.pow(t, 1 / exponent);
+    lathePoints.push(new THREE.Vector2(r, y));
   }
 
-  const geo = new THREE.LatheGeometry(pts, 36);
-  geo.rotateX(Math.PI / 2);
-  const mesh = new THREE.Mesh(geo, makeMat(state.material));
-  mesh.castShadow = mesh.receiveShadow = true;
-  registerMesh('fuselage', mesh);
-  console.log(`[AeroCAD] Fuselage L=${L}m D=${fuseDiameter}m`);
+  // Transition shoulder
+  lathePoints.push(new THREE.Vector2(R, noseLen + 0.001));
+
+  // Straight cylindrical body
+  const bodyEnd = L - R * 0.4;  // slight tail taper starts here
+  lathePoints.push(new THREE.Vector2(R, bodyEnd));
+
+  // Tail taper (boat-tail)
+  const TailPts = 8;
+  for (let i = 1; i <= TailPts; i++) {
+    const t = i / TailPts;
+    const y = bodyEnd + t * (L - bodyEnd);
+    const r = R * (1 - 0.3 * t);   // taper to 70% radius
+    lathePoints.push(new THREE.Vector2(r, y));
+  }
+
+  return new THREE.LatheGeometry(lathePoints, 48);
 }
 
-function buildCanopy() {
-  disposeMeshGroup('canopy');
-  if (!state.canopyShow) return;
-  const { fuseLength: L, fuseDiameter, canopyLength: cL, canopyWidth: cW, canopyHeight: cH } = state;
-  const r = fuseDiameter / 2;
-  const xStart = -L / 2 + L * 0.14;
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. MASS PROPERTIES CALCULATOR
+// ─────────────────────────────────────────────────────────────────────────────
 
-  // Ellipsoid canopy via LatheGeometry profile then scale
-  const pts = [];
-  const segs = 18;
-  for (let i = 0; i <= segs; i++) {
-    const a = (Math.PI * i) / segs;
-    pts.push(new THREE.Vector2(Math.sin(a), Math.cos(a)));
-  }
-  const geo = new THREE.LatheGeometry(pts, 24);
-  geo.rotateX(Math.PI / 2);
-  const mesh = new THREE.Mesh(geo, canopyMat.clone());
-  mesh.scale.set(cW / 2, cH, cL / 2);
-  mesh.position.set(xStart + cL / 2, r + cH * 0.4, 0);
-  mesh.castShadow = true;
-  registerMesh('canopy', mesh);
+/**
+ * Calculate volume, mass, and CoG for the current parametric state.
+ * Returns { wingVolume, fuseVolume, totalMass, wingMass, fuseMass, cog, wingArea, AR }
+ */
+function calculateMassProperties() {
+  const mat  = MATERIALS[p.material];
+  const rho  = mat.density;  // kg/m³
+
+  // ── Wing ──
+  const contour     = generateNACAContour(p.naca, 60);
+  const rootArea    = airfoilArea(contour, p.chord);
+  const tipArea     = airfoilArea(contour, p.chord * p.taperRatio);
+  // Trapezoidal rule for volume along span
+  const halfSpan    = p.wingspan / 2;
+  // Cross-section area varies linearly with chord (area ∝ chord²)
+  const wingVolume  = 2 * (rootArea + tipArea) / 2 * halfSpan;
+
+  // Wing planform area (trapezoidal rule): S = (rootChord + tipChord)/2 × span
+  const avgChord  = (p.chord + p.chord * p.taperRatio) / 2;
+  const wingArea  = avgChord * p.wingspan;
+  const AR        = (p.wingspan * p.wingspan) / wingArea;
+
+  const wingMass  = wingVolume * rho;
+
+  // ── Fuselage ──
+  // Volume decomposed to match the LatheGeometry profile exactly:
+  //   nose ogive: y in [0, noseLen]
+  //   cylinder body: y in [noseLen, bodyEnd]   (bodyEnd = L - tailLen)
+  //   tail frustum: y in [bodyEnd, L]
+  const R        = p.fuseDiam / 2;
+  const noseLen  = R * 2 * p.noseConeSharpness;
+  const tailLen  = R * 0.4;
+  const bodyEnd  = p.fuseLength - tailLen;
+  const bodyLen  = Math.max(0, bodyEnd - noseLen);
+  // Nose ogive ≈ half-ellipsoid: V = (2/3) π R² h
+  const noseVol  = (2 / 3) * Math.PI * R * R * Math.min(noseLen, p.fuseLength);
+  // Straight cylinder (between nose shoulder and tail taper start)
+  const cylVol   = Math.PI * R * R * bodyLen;
+  // Tail frustum taper from R to 0.7*R
+  const R2       = R * 0.7;
+  const tailVol  = (Math.PI * tailLen / 3) * (R * R + R * R2 + R2 * R2);
+  const fuseVolume = noseVol + cylVol + tailVol;
+  const fuseMass   = fuseVolume * rho;
+
+  const totalMass = wingMass + fuseMass;
+
+  // ── Center of Gravity ──
+  // Wing CoG: at 40% chord from LE, at mid-span, mid-dihedral
+  const rootLE_Z  = -p.chord * 0.25;
+  const sweepOff  = halfSpan * Math.tan(p.sweep * Math.PI / 180);
+  const tipLE_Z   = rootLE_Z + sweepOff;
+  const avgLE_Z   = (rootLE_Z + tipLE_Z) / 2;
+  const avgChordZ = (p.chord + p.chord * p.taperRatio) / 2;
+  const wingCoG_Z = avgLE_Z + 0.4 * avgChordZ;
+  const wingCoG_Y = halfSpan * Math.tan(p.dihedral * Math.PI / 180) * 0.5;
+  const wingCoG   = new THREE.Vector3(0, wingCoG_Y, wingCoG_Z);
+
+  // Fuselage CoG: at ~42% of total length from nose, centred in Y/X
+  const fuseCoG_Z = -p.fuseLength / 2 + 0.42 * p.fuseLength;
+  const fuseCoG   = new THREE.Vector3(0, 0, fuseCoG_Z);
+
+  // Weighted average
+  const cog = new THREE.Vector3(
+    (wingCoG.x * wingMass + fuseCoG.x * fuseMass) / totalMass,
+    (wingCoG.y * wingMass + fuseCoG.y * fuseMass) / totalMass,
+    (wingCoG.z * wingMass + fuseCoG.z * fuseMass) / totalMass
+  );
+
+  return { wingVolume, fuseVolume, totalMass, wingMass, fuseMass, cog, wingArea, AR };
 }
 
-function buildWings() {
-  disposeMeshGroup('wings');
-  const { nacaCode, wingSpan, wingChord, wingTaper, wingSweep, wingDihedral, wingPos, fuseLength: L } = state;
-  const halfSpan = wingSpan / 2;
-  const xPos = -L / 2 + L * (wingPos / 100);
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. THREE.JS SCENE INITIALISATION
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const [geoR, geoL] = buildWingSlab({
-    chord: wingChord, tipChordRatio: wingTaper,
-    halfSpan, sweep: wingSweep, dihedral: wingDihedral,
-    nacaCode,
-  });
+function initScene() {
+  const canvas = document.getElementById('viewport');
 
-  const matR = makeMat(state.material), matL = makeMat(state.material);
-  const mR = new THREE.Mesh(geoR, matR);
-  const mL = new THREE.Mesh(geoL, matL);
-  mR.position.x = mL.position.x = xPos;
-  mR.castShadow = mL.castShadow = true;
-  registerMesh('wings', mR);
-  registerMesh('wings', mL);
-  console.log(`[AeroCAD] Wings NACA=${nacaCode} span=${wingSpan}m chord=${wingChord}m sweep=${wingSweep}°`);
+  // ── Renderer ──
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type    = THREE.PCFSoftShadowMap;
+  renderer.toneMapping       = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.1;
+  renderer.setClearColor(0x0d0d12, 1);
+
+  // ── Scene ──
+  scene      = new THREE.Scene();
+  scene.fog  = new THREE.FogExp2(0x0d0d12, 0.008);
+  sceneGroup = new THREE.Group();
+  scene.add(sceneGroup);
+
+  // ── Camera ──
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.01, 2000);
+  camera.position.set(18, 9, 22);
+  camera.lookAt(0, 0, 0);
+
+  // ── OrbitControls ──
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping    = true;
+  controls.dampingFactor    = 0.07;
+  controls.screenSpacePanning = true;
+  controls.minDistance      = 0.5;
+  controls.maxDistance      = 500;
+  controls.target.set(0, 0, 0);
+  controls.update();
+
+  // ── Lighting ──
+  const ambient = new THREE.AmbientLight(0x1a2240, 0.6);
+  scene.add(ambient);
+
+  const sun = new THREE.DirectionalLight(0xfff5e0, 1.4);
+  sun.position.set(30, 50, 20);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  scene.add(sun);
+
+  const fillLight = new THREE.DirectionalLight(0x0055aa, 0.5);
+  fillLight.position.set(-20, -10, -30);
+  scene.add(fillLight);
+
+  const rimLight = new THREE.PointLight(0x00e5ff, 0.8, 120);
+  rimLight.position.set(-15, 20, -10);
+  scene.add(rimLight);
+
+  // ── Grid ──
+  rebuildGrid(60);
+
+  // ── Axes Helper ──
+  const axes = new THREE.AxesHelper(5);
+  scene.add(axes);
+
+  // ── CoG Marker (sphere wireframe) ──
+  const cogGeo = new THREE.SphereGeometry(0.18, 16, 12);
+  cogMarker    = new THREE.Mesh(cogGeo, cogMat);
+  scene.add(cogMarker);
+
+  // ── Window resize ──
+  window.addEventListener('resize', onResize);
 }
 
-function buildWinglets() {
-  disposeMeshGroup('winglets');
-  if (!state.wingletsShow) return;
-  const { wingSpan, wingChord, wingTaper, wingSweep, wingDihedral, wingPos,
-          wingletHeight, wingletCant, wingletSweep, nacaCode, fuseLength: L } = state;
-  const halfSpan = wingSpan / 2;
-  const xPos = -L / 2 + L * (wingPos / 100);
-  const sweepRad = THREE.MathUtils.degToRad(wingSweep);
-  const dihedralRad = THREE.MathUtils.degToRad(wingDihedral);
-  const tipChord = wingChord * wingTaper;
-  const tipX = xPos + halfSpan * Math.tan(sweepRad) - (wingChord - tipChord) * 0.5 * wingTaper;
-  const tipY = halfSpan;
-  const tipZ = halfSpan * Math.tan(dihedralRad);
-
-  const cantRad = THREE.MathUtils.degToRad(wingletCant);
-  const wlSweepRad = THREE.MathUtils.degToRad(wingletSweep);
-
-  const pts = nacaPoints(nacaCode, 40);
-  const wlShape = new THREE.Shape();
-  wlShape.moveTo(pts[0].x * tipChord, pts[0].y * tipChord);
-  for (let i = 1; i < pts.length; i++) wlShape.lineTo(pts[i].x * tipChord, pts[i].y * tipChord);
-  wlShape.closePath();
-
-  const h = wingletHeight;
-  const geoR = new THREE.ExtrudeGeometry(wlShape, { steps: 1, depth: h, bevelEnabled: false });
-  geoR.rotateX(Math.PI / 2);
-  // Cant: rotate around X axis
-  geoR.rotateZ(-(Math.PI / 2 - cantRad));
-  // Apply sweep along height
-  const pos = geoR.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const y = pos.getY(i);
-    const t = Math.max(0, y) / h;
-    pos.setX(i, pos.getX(i) + t * h * Math.tan(wlSweepRad));
-  }
-  pos.needsUpdate = true;
-  geoR.computeVertexNormals();
-  geoR.translate(-tipChord / 2, 0, 0);
-
-  const geoL = geoR.clone();
-  const posL = geoL.attributes.position;
-  for (let i = 0; i < posL.count; i++) posL.setZ(i, -posL.getZ(i));
-  posL.needsUpdate = true;
-  geoL.computeVertexNormals();
-
-  const mR = new THREE.Mesh(geoR, makeMat(state.material));
-  const mL = new THREE.Mesh(geoL, makeMat(state.material));
-  mR.position.set(tipX, tipY, tipZ);
-  mL.position.set(tipX, -tipY, tipZ);
-  mR.castShadow = mL.castShadow = true;
-  registerMesh('winglets', mR);
-  registerMesh('winglets', mL);
+function rebuildGrid(size) {
+  if (gridHelper) scene.remove(gridHelper);
+  gridHelper = new THREE.GridHelper(size, size / 2, 0x1a1a2e, 0x1a1a2e);
+  gridHelper.material.opacity    = 0.6;
+  gridHelper.material.transparent = true;
+  gridHelper.position.y = -2;
+  scene.add(gridHelper);
 }
 
-function buildHStab() {
-  disposeMeshGroup('hstab');
-  const { fuseLength: L, hstabSpan, hstabChord, hstabSweep, hstabDihedral } = state;
-  const xPos = L / 2 - L * 0.06;
-  const [geoR, geoL] = buildWingSlab({
-    chord: hstabChord, tipChordRatio: 0.5,
-    halfSpan: hstabSpan / 2, sweep: hstabSweep, dihedral: hstabDihedral,
-    nacaCode: '0012',
-  });
-  const mR = new THREE.Mesh(geoR, makeMat(state.material));
-  const mL = new THREE.Mesh(geoL, makeMat(state.material));
-  mR.position.x = mL.position.x = xPos;
-  mR.castShadow = mL.castShadow = true;
-  registerMesh('hstab', mR);
-  registerMesh('hstab', mL);
-  console.log(`[AeroCAD] H-Stab span=${hstabSpan}m chord=${hstabChord}m`);
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
 }
 
-function buildVStab() {
-  disposeMeshGroup('vstab');
-  const { fuseLength: L, fuseDiameter, vstabHeight, vstabChord, vstabSweep, vstabTaper } = state;
-  const r = fuseDiameter / 2;
-  const xPos = L / 2 - L * 0.08;
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. GEOMETRY UPDATE FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
 
-  const pts = nacaPoints('0012', 40);
-  const vshape = new THREE.Shape();
-  vshape.moveTo(pts[0].x * vstabChord, pts[0].y * vstabChord);
-  for (let i = 1; i < pts.length; i++) vshape.lineTo(pts[i].x * vstabChord, pts[i].y * vstabChord);
-  vshape.closePath();
-
-  const tipChord = vstabChord * vstabTaper;
-  const sweepRad = THREE.MathUtils.degToRad(vstabSweep);
-  const geo = new THREE.ExtrudeGeometry(vshape, { steps: 1, depth: vstabHeight, bevelEnabled: false });
-
-  // Extrude is along Z, re-orient to Y (vertical)
-  geo.rotateX(Math.PI / 2);
-  geo.rotateZ(Math.PI / 2);
-
-  // Apply sweep + taper via vertex transform
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const z = pos.getZ(i);
-    const t = Math.max(0, z) / vstabHeight;
-    const scaleX = 1 - t * (1 - vstabTaper);
-    const xOrig = pos.getX(i);
-    pos.setX(i, xOrig * scaleX + t * vstabHeight * Math.tan(sweepRad) - (vstabChord - vstabChord * scaleX) * 0.5);
-    pos.setZ(i, z);
-  }
-  pos.needsUpdate = true;
-  geo.computeVertexNormals();
-  geo.translate(-vstabChord / 2, 0, 0);
-
-  const mesh = new THREE.Mesh(geo, makeMat(state.material));
-  mesh.position.set(xPos, r, 0);
-  mesh.castShadow = true;
-  registerMesh('vstab', mesh);
-  console.log(`[AeroCAD] V-Stab h=${vstabHeight}m chord=${vstabChord}m`);
+/** Dispose old geometry + remove mesh from scene group, return mesh ref. */
+function disposeMesh(mesh) {
+  if (!mesh) return null;
+  if (mesh.geometry) mesh.geometry.dispose();
+  sceneGroup.remove(mesh);
+  return null;
 }
 
-function buildEngines() {
-  disposeMeshGroup('engines');
-  const { engineCount: count, enginePos: pos, engineDiameter: diam, engineLength: elen,
-          engineSpanPos: spanPct, wingSpan, wingChord, wingSweep, wingDihedral, wingPos,
-          fuseLength: L, fuseDiameter } = state;
-  if (count === 0) return;
+/** Update wing geometry based on current state p. */
+function updateWing() {
+  console.log('[CAD] Updating wing — NACA', p.naca, '| span', p.wingspan, 'm | chord', p.chord, 'm');
 
-  const r = diam / 2;
-  const nR = fuseDiameter / 2;
-  const halfSpan = wingSpan / 2;
-  const sweepRad = THREE.MathUtils.degToRad(wingSweep);
-  const dihedralRad = THREE.MathUtils.degToRad(wingDihedral);
-  const wingX = -L / 2 + L * (wingPos / 100);
+  wingMeshLeft  = disposeMesh(wingMeshLeft);
+  wingMeshRight = disposeMesh(wingMeshRight);
 
-  // Build a single nacelle group (body + intake + nozzle)
-  function makeNacelle() {
-    const group = new THREE.Group();
+  applyMaterialColor();
 
-    // Body
-    const bodyGeo = new THREE.CylinderGeometry(r * 0.9, r * 0.85, elen * 0.8, 24, 1);
-    bodyGeo.rotateX(Math.PI / 2);
-    const bodyMesh = new THREE.Mesh(bodyGeo, makeMat(state.material));
-    group.add(bodyMesh);
+  const geoRight = buildHalfWingGeometry(p, +1);
+  const geoLeft  = buildHalfWingGeometry(p, -1);
 
-    // Intake ring (fan face)
-    const intakeGeo = new THREE.TorusGeometry(r, r * 0.08, 12, 32);
-    intakeGeo.rotateX(Math.PI / 2);
-    const intakeMesh = new THREE.Mesh(intakeGeo, new THREE.MeshStandardMaterial({ color: 0x223344, roughness: 0.3, metalness: 0.95 }));
-    intakeMesh.position.z = -elen * 0.4;
-    group.add(intakeMesh);
+  wingMeshRight = new THREE.Mesh(geoRight, wingMat);
+  wingMeshLeft  = new THREE.Mesh(geoLeft,  wingMat);
 
-    // Intake lip
-    const lipGeo = new THREE.CylinderGeometry(r * 1.05, r * 0.9, elen * 0.08, 24);
-    lipGeo.rotateX(Math.PI / 2);
-    const lipMesh = new THREE.Mesh(lipGeo, makeMat(state.material));
-    lipMesh.position.z = -elen * 0.4;
-    group.add(lipMesh);
+  wingMeshRight.castShadow    = true;
+  wingMeshRight.receiveShadow = true;
+  wingMeshLeft.castShadow     = true;
+  wingMeshLeft.receiveShadow  = true;
 
-    // Fan disk (inside)
-    const fanGeo = new THREE.CylinderGeometry(r * 0.88, r * 0.88, 0.04, 24);
-    fanGeo.rotateX(Math.PI / 2);
-    const fanMesh = new THREE.Mesh(fanGeo, new THREE.MeshStandardMaterial({ color: 0x445566, roughness: 0.2, metalness: 0.9 }));
-    fanMesh.position.z = -elen * 0.38;
-    group.add(fanMesh);
-
-    // Nozzle
-    const nozzleGeo = new THREE.CylinderGeometry(r * 0.6, r * 0.85, elen * 0.2, 20, 1);
-    nozzleGeo.rotateX(Math.PI / 2);
-    const nozzleMesh = new THREE.Mesh(nozzleGeo, makeMat(state.material));
-    nozzleMesh.position.z = elen * 0.5;
-    group.add(nozzleMesh);
-
-    // Pylon (underwing only)
-    if (pos === 'underwing') {
-      const pylonGeo = new THREE.BoxGeometry(0.15, 0.7, elen * 0.5);
-      const pylonMesh = new THREE.Mesh(pylonGeo, makeMat(state.material));
-      pylonMesh.position.y = 0.45;
-      group.add(pylonMesh);
-    }
-
-    return group;
-  }
-
-  // Position nacelles
-  function getPositions() {
-    const positions = [];
-    if (pos === 'underwing') {
-      const spanFracs = count === 4 ? [0.3, 0.55] : count === 1 ? [0] : [spanPct / 100];
-      const counts = count === 4 ? 2 : count === 1 ? 1 : 1;
-      const side = count === 1 ? [0] : [-1, 1];
-      for (const frac of spanFracs) {
-        for (const s of side) {
-          const y = s * halfSpan * frac;
-          const absY = Math.abs(y);
-          const t = absY / halfSpan;
-          const x = wingX + absY * Math.tan(sweepRad);
-          const z = -r * 1.4 - absY * Math.tan(dihedralRad) * 0.8;
-          positions.push(new THREE.Vector3(x, y, z));
-        }
-      }
-    } else if (pos === 'rear') {
-      const offsets = count === 1 ? [0] : count === 2 ? [-nR * 1.6, nR * 1.6] : [-nR * 2.5, -nR * 0.8, nR * 0.8, nR * 2.5];
-      for (const yo of offsets.slice(0, count)) {
-        positions.push(new THREE.Vector3(L / 2 - elen * 0.8, yo, nR * 0.4));
-      }
-    } else if (pos === 'top') {
-      const offsets = count === 1 ? [0] : count === 2 ? [-r * 1.2, r * 1.2] : [-r * 2.5, -r * 0.8, r * 0.8, r * 2.5];
-      for (const yo of offsets.slice(0, count)) {
-        positions.push(new THREE.Vector3(L / 2 - elen, yo, nR + r * 0.8));
-      }
-    } else if (pos === 'nose') {
-      // Prop engine at nose
-      positions.push(new THREE.Vector3(-L / 2 - elen * 0.4, 0, 0));
-    }
-    return positions;
-  }
-
-  for (const p3 of getPositions()) {
-    const nacelle = makeNacelle();
-    nacelle.position.copy(p3);
-    scene.add(nacelle);
-    // Register all children
-    nacelle.children.forEach(c => { c.userData.groupKey = 'engines'; });
-    meshGroups.engines.push(nacelle);
-  }
-
-  console.log(`[AeroCAD] Engines count=${count} pos=${pos}`);
-}
-
-function buildLandingGear() {
-  disposeMeshGroup('gear');
-  if (!state.gearShow) return;
-  const { fuseLength: L, fuseDiameter, gearType, gearStrut: strutLen, gearRadius: wRadius } = state;
-  const r = fuseDiameter / 2;
-  const strutR = wRadius * 0.12;
-  const strutMat = new THREE.MeshStandardMaterial({ color: 0x445566, roughness: 0.4, metalness: 0.85 });
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x181818, roughness: 0.85, metalness: 0.1 });
-  const hubMat   = new THREE.MeshStandardMaterial({ color: 0x667788, roughness: 0.3, metalness: 0.9 });
-
-  function makeStrut(x, y, isMain = false) {
-    const g = new THREE.Group();
-    // Strut cylinder
-    const sg = new THREE.CylinderGeometry(strutR, strutR * 0.8, strutLen, 10);
-    const sm = new THREE.Mesh(sg, strutMat);
-    sm.position.z = -strutLen / 2;
-    sm.rotation.x = Math.PI / 2;
-    g.add(sm);
-    // Axle
-    const axleLen = isMain ? wRadius * 0.6 : 0;
-    if (isMain) {
-      const ag = new THREE.CylinderGeometry(strutR * 0.6, strutR * 0.6, wRadius * 0.6, 8);
-      const am = new THREE.Mesh(ag, strutMat);
-      am.rotation.z = Math.PI / 2;
-      am.position.set(0, 0, -(strutLen + wRadius));
-      g.add(am);
-    }
-    // Wheels
-    const wheelPositions = isMain ? [-axleLen / 2, axleLen / 2] : [0];
-    for (const wy of wheelPositions) {
-      const wg = new THREE.TorusGeometry(wRadius, wRadius * 0.32, 12, 28);
-      const wm = new THREE.Mesh(wg, wheelMat);
-      wm.rotation.y = Math.PI / 2;
-      wm.position.set(isMain ? wy : 0, 0, -(strutLen + wRadius));
-      g.add(wm);
-      // Hub cap
-      const hg = new THREE.CylinderGeometry(wRadius * 0.45, wRadius * 0.45, wRadius * 0.1, 16);
-      const hm = new THREE.Mesh(hg, hubMat);
-      hm.rotation.z = Math.PI / 2;
-      hm.position.set(isMain ? wy + wRadius * 0.05 : 0, 0, -(strutLen + wRadius));
-      g.add(hm);
-    }
-    g.position.set(x, y, r);
-    return g;
-  }
-
-  if (gearType === 'tricycle') {
-    const noseGear = makeStrut(-L / 2 + L * 0.12, 0, false);
-    const mainR    = makeStrut(L * (-0.5 + (state.wingPos / 100)) + L * 0.02,  fuseDiameter * 0.6, true);
-    const mainL    = makeStrut(L * (-0.5 + (state.wingPos / 100)) + L * 0.02, -fuseDiameter * 0.6, true);
-    for (const g of [noseGear, mainR, mainL]) {
-      scene.add(g);
-      meshGroups.gear.push(g);
-    }
-  } else if (gearType === 'taildragger') {
-    const mainR = makeStrut(-L / 2 + L * 0.25,  fuseDiameter * 0.55, true);
-    const mainL = makeStrut(-L / 2 + L * 0.25, -fuseDiameter * 0.55, true);
-    const tailG = makeStrut(L / 2 - L * 0.06, 0, false);
-    for (const g of [mainR, mainL, tailG]) {
-      scene.add(g);
-      meshGroups.gear.push(g);
-    }
-  } else { // tandem
-    const front = makeStrut(-L / 2 + L * 0.2, 0, false);
-    const rear  = makeStrut( L / 2 - L * 0.2, 0, false);
-    const stabR = makeStrut( 0, fuseDiameter * 0.5, false);
-    const stabL = makeStrut( 0, -fuseDiameter * 0.5, false);
-    for (const g of [front, rear, stabR, stabL]) {
-      scene.add(g);
-      meshGroups.gear.push(g);
-    }
-  }
-  console.log(`[AeroCAD] Gear type=${gearType}`);
-}
-
-function buildCoG() {
-  disposeMeshGroup('cog');
-  const cogX = computeCoGPosition();
-  const geo = new THREE.SphereGeometry(0.38, 16, 16);
-  const mat = new THREE.MeshStandardMaterial({ color: 0xffab00, emissive: 0xffab00, emissiveIntensity: 0.7, roughness: 0.3, metalness: 0.4 });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.set(cogX, 0, 0);
-  registerMesh('cog', mesh);
-  return cogX;
-}
-
-function computeCoGPosition() {
-  // Weighted CoG by component mass * centroid X
-  const { fuseLength: L, wingPos, hstabSpan, hstabChord, vstabHeight, vstabChord } = state;
-  const wingX  = -L / 2 + L * (wingPos / 100) + (state.wingChord / 2);
-  const fuseX  = 0;
-  const hstabX = L / 2 - L * 0.1;
-  const vstabX = L / 2 - L * 0.12;
-
-  const fuseMass   = Math.PI * (state.fuseDiameter / 2) ** 2 * L * 0.18;
-  const wingMass   = state.wingChord * state.wingSpan * 0.08;
-  const hstabMass  = hstabChord * hstabSpan * 0.04;
-  const vstabMass  = vstabChord * vstabHeight * 0.04;
-
-  const totalMass = fuseMass + wingMass + hstabMass + vstabMass;
-  const cogX = (fuseMass * fuseX + wingMass * wingX + hstabMass * hstabX + vstabMass * vstabX) / totalMass;
-  return cogX;
-}
-
-// ─── Full Scene Rebuild ───────────────────────────────────────────────────────
-function rebuildScene() {
-  buildFuselage();
-  buildCanopy();
-  buildWings();
-  buildWinglets();
-  buildHStab();
-  buildVStab();
-  buildEngines();
-  buildLandingGear();
-  buildCoG();
-  applyViewMode();
-  applyVisibility();
+  sceneGroup.add(wingMeshRight, wingMeshLeft);
   updateTelemetry();
 }
 
-// ─── Telemetry ────────────────────────────────────────────────────────────────
+/** Update fuselage geometry based on current state p. */
+function updateFuselage() {
+  console.log('[CAD] Updating fuselage — L', p.fuseLength, 'm | D', p.fuseDiam, 'm | nose', p.noseConeSharpness);
+
+  fuseMesh = disposeMesh(fuseMesh);
+
+  applyMaterialColor();
+
+  const geo = buildFuselageGeometry(p);
+  fuseMesh  = new THREE.Mesh(geo, fuseMat);
+
+  // LatheGeometry is around Y; rotate so fuselage aligns with Z axis (nose in -Z).
+  fuseMesh.rotation.x = Math.PI / 2;
+
+  // After rotation, local Y (length) becomes world +Z.
+  // nose tip (local y=0) → world z=0 after rotation.
+  // Translate so nose is at z = -L/2 (centred).
+  fuseMesh.position.z = -p.fuseLength / 2;
+
+  fuseMesh.castShadow    = true;
+  fuseMesh.receiveShadow = true;
+
+  sceneGroup.add(fuseMesh);
+  updateTelemetry();
+}
+
+/** Move CoG sphere to calculated CoG position. */
+function updateCoG() {
+  const mp = calculateMassProperties();
+  cogMarker.position.copy(mp.cog);
+}
+
+/** Recalculate and display all telemetry values. */
 function updateTelemetry() {
-  const { fuseLength: L, fuseDiameter, wingSpan, wingChord, wingTaper,
-          hstabSpan, hstabChord, vstabHeight, vstabChord, material } = state;
-  const mp = MAT_PROPS[material] || MAT_PROPS.aluminum;
-  const r = fuseDiameter / 2;
+  const mp = calculateMassProperties();
+  updateCoG();
 
-  // Volumes (shell approximation)
-  const fuseVol = (Math.PI * r * r * L * 0.82) * 0.06; // shell fraction
-  const meanChord = wingChord * (1 + wingTaper) / 2;
-  const t = parseInt(state.nacaCode.slice(2)) / 100;
-  const airfoilArea = t * 0.68 * meanChord * meanChord;
-  const wingVol = airfoilArea * wingSpan * 0.25;
-  const hstabVol = 0.12 * hstabChord * hstabSpan * 0.015;
-  const vstabVol  = 0.12 * vstabChord * vstabHeight * 0.015;
-  const totalVol  = fuseVol + wingVol + hstabVol + vstabVol;
+  const fmt = (v, dec = 2) => isFinite(v) ? v.toFixed(dec) : '—';
 
-  // Mass (g/cm³ × cm³ → g → kg)
-  const massKg = (totalVol * 1e6 * mp.density) / 1000;
-
-  // Wing reference area (trapezoidal)
-  const sRef = 0.5 * (wingChord + wingChord * wingTaper) * wingSpan;
-
-  // H-tail area
-  const sHT = hstabChord * hstabSpan * 0.75;
-
-  // Wetted area approximation
-  const swetFuse  = Math.PI * fuseDiameter * L * 0.85;
-  const swetWings = 2 * sRef * 2.04;
-  const swetHstab = 2 * sHT * 2.04;
-  const swetVstab = 2 * vstabChord * vstabHeight * 0.75 * 2.04;
-  const swetTotal = swetFuse + swetWings + swetHstab + swetVstab;
-
-  // Aerodynamic ratios
-  const AR      = (wingSpan * wingSpan) / sRef;
-  const wingLoad = massKg / sRef;
-  const fineness = L / fuseDiameter;
-
-  // Static margin (simplified, % MAC)
-  const cogX  = computeCoGPosition();
-  const acX   = -L / 2 + L * (state.wingPos / 100) + meanChord * 0.25;
-  const SM    = ((acX - cogX) / meanChord) * 100;
-
-  // Update DOM
-  set('t-mass',      massKg.toFixed(0));
-  set('t-wing-area', sRef.toFixed(1));
-  set('t-wing-load', wingLoad.toFixed(1));
-  set('t-ar',        AR.toFixed(2));
-  set('t-fineness',  fineness.toFixed(1));
-  set('t-wetted',    swetTotal.toFixed(0));
-  set('t-cog',       cogX.toFixed(2));
-  set('t-sm',        SM.toFixed(1));
-  set('t-total-vol', totalVol.toFixed(2));
-  set('t-material',  MAT_NAMES[material] || material);
+  document.getElementById('t-mass').textContent     = fmt(mp.totalMass, 1);
+  document.getElementById('t-wingmass').textContent  = fmt(mp.wingMass,  1);
+  document.getElementById('t-fusemass').textContent  = fmt(mp.fuseMass,  1);
+  document.getElementById('t-wingvol').textContent   = fmt(mp.wingVolume, 3);
+  document.getElementById('t-fusevol').textContent   = fmt(mp.fuseVolume, 3);
+  document.getElementById('t-wingarea').textContent  = fmt(mp.wingArea,  2);
+  document.getElementById('t-ar').textContent        = fmt(mp.AR, 2);
+  document.getElementById('t-cog').textContent       =
+    `${fmt(mp.cog.x,1)}, ${fmt(mp.cog.y,1)}, ${fmt(mp.cog.z,1)}`;
 }
 
-function set(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.textContent = val;
+/** Apply material color to wing and fuselage meshes. */
+function applyMaterialColor() {
+  const matInfo = MATERIALS[p.material];
+  wingMat.color.setHex(matInfo.color);
+  fuseMat.color.setHex(matInfo.color);
+  wingMat.wireframe = wireframeMode;
+  fuseMat.wireframe = wireframeMode;
 }
 
-// ─── View Mode ────────────────────────────────────────────────────────────────
-function applyViewMode() {
-  const mode = state.viewMode;
-  for (const [key, meshes] of Object.entries(meshGroups)) {
-    for (const m of meshes) {
-      applyModeToObject(m, mode, key);
-    }
-  }
+/** Full rebuild of all geometry. */
+function rebuildAll() {
+  updateWing();
+  updateFuselage();
 }
 
-function applyModeToObject(obj, mode, key) {
-  if (obj.isGroup) {
-    obj.traverse(child => { if (child.isMesh) applyModeToMesh(child, mode, key); });
-  } else if (obj.isMesh) {
-    applyModeToMesh(obj, mode, key);
-  }
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. STL EXPORT
+// ─────────────────────────────────────────────────────────────────────────────
 
-function applyModeToMesh(mesh, mode, key) {
-  // Don't overwrite the glass canopy material
-  if (key === 'cog') return;
-  if (key === 'canopy') {
-    mesh.material.wireframe = mode === 'wireframe';
-    mesh.material.opacity   = mode === 'xray' ? 0.15 : 0.35;
-    return;
-  }
-  if (mode === 'solid') {
-    mesh.material.wireframe    = false;
-    mesh.material.transparent  = false;
-    mesh.material.opacity      = 1;
-    mesh.material.depthWrite   = true;
-  } else if (mode === 'wireframe') {
-    mesh.material.wireframe    = true;
-    mesh.material.transparent  = false;
-    mesh.material.opacity      = 1;
-  } else if (mode === 'xray') {
-    mesh.material.wireframe    = false;
-    mesh.material.transparent  = true;
-    mesh.material.opacity      = 0.22;
-    mesh.material.depthWrite   = false;
-  }
-}
+function exportSTL() {
+  const exporter    = new STLExporter();
+  const exportGroup = new THREE.Group();
 
-// ─── Visibility Toggles ───────────────────────────────────────────────────────
-function applyVisibility() {
-  for (const [key, meshes] of Object.entries(meshGroups)) {
-    const vis = visibility[key] !== false;
-    for (const m of meshes) m.visible = vis;
-  }
-}
-
-function toggleVisibility(key) {
-  visibility[key] = !visibility[key];
-  applyVisibility();
-  // Update toggle icon
-  const toggle = document.querySelector(`.vis-toggle[data-target="${key}"]`);
-  if (toggle) toggle.classList.toggle('off', !visibility[key]);
-}
-
-// Assembly tree visibility toggles
-document.querySelectorAll('.vis-toggle').forEach(btn => {
-  btn.addEventListener('click', e => {
-    e.stopPropagation();
-    toggleVisibility(btn.dataset.target);
+  // Only export visible solid meshes
+  const toExport = [wingMeshLeft, wingMeshRight, fuseMesh].filter(Boolean);
+  toExport.forEach(m => {
+    const clone = m.clone();
+    clone.updateMatrixWorld(true);
+    exportGroup.add(clone);
   });
-});
+  exportGroup.updateMatrixWorld(true);
 
-// Assembly tree active state
-document.querySelectorAll('.tree-item').forEach(item => {
-  item.addEventListener('click', () => {
-    document.querySelectorAll('.tree-item').forEach(i => i.classList.remove('active'));
-    item.classList.add('active');
-  });
-});
-
-// Collapse sidebars
-document.getElementById('left-collapse').addEventListener('click', () =>
-  document.getElementById('left-sidebar').classList.toggle('collapsed'));
-document.getElementById('right-collapse').addEventListener('click', () =>
-  document.getElementById('right-sidebar').classList.toggle('collapsed'));
-
-// ─── View Mode Buttons ────────────────────────────────────────────────────────
-document.querySelectorAll('.view-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    state.viewMode = btn.dataset.mode;
-    applyViewMode();
-  });
-});
-
-// ─── Camera Presets ───────────────────────────────────────────────────────────
-const CAM_PRESETS = {
-  iso:   { pos: [30, 14, 48],   target: [0, 0, 0] },
-  top:   { pos: [0, 80, 0.01],  target: [0, 0, 0] },
-  front: { pos: [-80, 0, 0],    target: [0, 0, 0] },
-  side:  { pos: [0, 2, 70],     target: [0, 0, 0] },
-  rear:  { pos: [80, 4, 0],     target: [0, 0, 0] },
-};
-
-document.querySelectorAll('.cam-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const p = CAM_PRESETS[btn.dataset.cam];
-    if (!p) return;
-    camera.position.set(...p.pos);
-    controls.target.set(...p.target);
-    controls.update();
-  });
-});
-
-// ─── Slider/Input Binding ─────────────────────────────────────────────────────
-function bindSlider(sliderId, numId, stateKey, onChanged) {
-  const sl = document.getElementById(sliderId);
-  const nm = document.getElementById(numId);
-  if (!sl || !nm) return;
-
-  function sync(val) {
-    const v = parseFloat(val);
-    state[stateKey] = v;
-    sl.value = v; nm.value = v;
-    updateTrack(sl);
-    onChanged();
-  }
-  sl.addEventListener('input', () => sync(sl.value));
-  nm.addEventListener('change', () => {
-    const clamped = Math.min(parseFloat(nm.max), Math.max(parseFloat(nm.min), parseFloat(nm.value)));
-    sync(clamped);
-  });
-  updateTrack(sl);
+  const stlString = exporter.parse(exportGroup, { binary: false });
+  const blob      = new Blob([stlString], { type: 'text/plain' });
+  const url       = URL.createObjectURL(blob);
+  const a         = document.createElement('a');
+  a.href          = url;
+  a.download      = `aerocad_${p.naca}_${p.wingspan}m.stl`;
+  a.click();
+  URL.revokeObjectURL(url);
+  console.log('[CAD] STL exported');
+  showToast('STL exported successfully!');
 }
 
-function updateTrack(sl) {
-  const pct = ((parseFloat(sl.value) - parseFloat(sl.min)) / (parseFloat(sl.max) - parseFloat(sl.min))) * 100;
-  sl.style.setProperty('--progress', `${pct}%`);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. BACKEND API
+// ─────────────────────────────────────────────────────────────────────────────
 
-function bindToggle(id, stateKey, onChanged) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.addEventListener('change', () => { state[stateKey] = el.checked; onChanged(); });
-}
-
-function bindSelect(id, stateKey, onChanged) {
-  const el = document.getElementById(id);
-  if (!el) return;
-  el.addEventListener('change', () => { state[stateKey] = el.value; onChanged(); });
-}
-
-function syncUIFromState() {
-  const pairs = [
-    ['fuse-length','fuse-length-num','fuseLength'],
-    ['fuse-diameter','fuse-diameter-num','fuseDiameter'],
-    ['fuse-nose','fuse-nose-num','fuseNose'],
-    ['fuse-taper','fuse-taper-num','fuseTaper'],
-    ['canopy-length','canopy-length-num','canopyLength'],
-    ['canopy-width','canopy-width-num','canopyWidth'],
-    ['canopy-height','canopy-height-num','canopyHeight'],
-    ['wing-span','wing-span-num','wingSpan'],
-    ['wing-chord','wing-chord-num','wingChord'],
-    ['wing-taper','wing-taper-num','wingTaper'],
-    ['wing-sweep','wing-sweep-num','wingSweep'],
-    ['wing-dihedral','wing-dihedral-num','wingDihedral'],
-    ['wing-pos','wing-pos-num','wingPos'],
-    ['winglet-height','winglet-height-num','wingletHeight'],
-    ['winglet-cant','winglet-cant-num','wingletCant'],
-    ['winglet-sweep','winglet-sweep-num','wingletSweep'],
-    ['hstab-span','hstab-span-num','hstabSpan'],
-    ['hstab-chord','hstab-chord-num','hstabChord'],
-    ['hstab-sweep','hstab-sweep-num','hstabSweep'],
-    ['hstab-dihedral','hstab-dihedral-num','hstabDihedral'],
-    ['vstab-height','vstab-height-num','vstabHeight'],
-    ['vstab-chord','vstab-chord-num','vstabChord'],
-    ['vstab-sweep','vstab-sweep-num','vstabSweep'],
-    ['vstab-taper','vstab-taper-num','vstabTaper'],
-    ['engine-diameter','engine-diameter-num','engineDiameter'],
-    ['engine-length','engine-length-num','engineLength'],
-    ['engine-spanpos','engine-spanpos-num','engineSpanPos'],
-    ['gear-strut','gear-strut-num','gearStrut'],
-    ['gear-radius','gear-radius-num','gearRadius'],
-  ];
-  pairs.forEach(([slId, numId, key]) => {
-    const sl = document.getElementById(slId), nm = document.getElementById(numId);
-    if (sl) { sl.value = state[key]; updateTrack(sl); }
-    if (nm) nm.value = state[key];
-  });
-  const nacaEl = document.getElementById('naca-code');
-  if (nacaEl) nacaEl.value = state.nacaCode;
-  const matEl = document.getElementById('material-select');
-  if (matEl) matEl.value = state.material;
-  const canopyEl = document.getElementById('canopy-show');
-  if (canopyEl) canopyEl.checked = state.canopyShow;
-  const wingletsEl = document.getElementById('winglets-show');
-  if (wingletsEl) wingletsEl.checked = state.wingletsShow;
-  const gearEl = document.getElementById('gear-show');
-  if (gearEl) gearEl.checked = state.gearShow;
-  const engCountEl = document.getElementById('engine-count');
-  if (engCountEl) engCountEl.value = state.engineCount;
-  const engPosEl = document.getElementById('engine-pos');
-  if (engPosEl) engPosEl.value = state.enginePos;
-  const gearTypeEl = document.getElementById('gear-type');
-  if (gearTypeEl) gearTypeEl.value = state.gearType;
-}
-
-// ─── Wire All Controls ────────────────────────────────────────────────────────
-function bindAll() {
-  // Fuselage
-  bindSlider('fuse-length','fuse-length-num','fuseLength', rebuildScene);
-  bindSlider('fuse-diameter','fuse-diameter-num','fuseDiameter', rebuildScene);
-  bindSlider('fuse-nose','fuse-nose-num','fuseNose', rebuildScene);
-  bindSlider('fuse-taper','fuse-taper-num','fuseTaper', rebuildScene);
-
-  // Canopy
-  bindToggle('canopy-show','canopyShow', rebuildScene);
-  bindSlider('canopy-length','canopy-length-num','canopyLength', rebuildScene);
-  bindSlider('canopy-width','canopy-width-num','canopyWidth', rebuildScene);
-  bindSlider('canopy-height','canopy-height-num','canopyHeight', rebuildScene);
-
-  // Wings
-  bindSlider('wing-span','wing-span-num','wingSpan', rebuildScene);
-  bindSlider('wing-chord','wing-chord-num','wingChord', rebuildScene);
-  bindSlider('wing-taper','wing-taper-num','wingTaper', rebuildScene);
-  bindSlider('wing-sweep','wing-sweep-num','wingSweep', rebuildScene);
-  bindSlider('wing-dihedral','wing-dihedral-num','wingDihedral', rebuildScene);
-  bindSlider('wing-pos','wing-pos-num','wingPos', rebuildScene);
-
-  document.getElementById('btn-apply-naca').addEventListener('click', () => {
-    const code = document.getElementById('naca-code').value.trim();
-    if (/^\d{4}$/.test(code)) {
-      state.nacaCode = code;
-      buildWings(); buildWinglets();
-      updateTelemetry();
-      console.log(`[AeroCAD] NACA=${code}`);
-    } else showNotification('Invalid NACA code — 4 digits required (e.g. 2412)', 'error');
-  });
-
-  // Winglets
-  bindToggle('winglets-show','wingletsShow', rebuildScene);
-  bindSlider('winglet-height','winglet-height-num','wingletHeight', rebuildScene);
-  bindSlider('winglet-cant','winglet-cant-num','wingletCant', rebuildScene);
-  bindSlider('winglet-sweep','winglet-sweep-num','wingletSweep', rebuildScene);
-
-  // H-Stab
-  bindSlider('hstab-span','hstab-span-num','hstabSpan', rebuildScene);
-  bindSlider('hstab-chord','hstab-chord-num','hstabChord', rebuildScene);
-  bindSlider('hstab-sweep','hstab-sweep-num','hstabSweep', rebuildScene);
-  bindSlider('hstab-dihedral','hstab-dihedral-num','hstabDihedral', rebuildScene);
-
-  // V-Stab
-  bindSlider('vstab-height','vstab-height-num','vstabHeight', rebuildScene);
-  bindSlider('vstab-chord','vstab-chord-num','vstabChord', rebuildScene);
-  bindSlider('vstab-sweep','vstab-sweep-num','vstabSweep', rebuildScene);
-  bindSlider('vstab-taper','vstab-taper-num','vstabTaper', rebuildScene);
-
-  // Engines
-  bindSelect('engine-count','engineCount', () => { state.engineCount = parseInt(document.getElementById('engine-count').value); rebuildScene(); });
-  bindSelect('engine-pos','enginePos', rebuildScene);
-  bindSlider('engine-diameter','engine-diameter-num','engineDiameter', rebuildScene);
-  bindSlider('engine-length','engine-length-num','engineLength', rebuildScene);
-  bindSlider('engine-spanpos','engine-spanpos-num','engineSpanPos', rebuildScene);
-
-  // Landing gear
-  bindToggle('gear-show','gearShow', rebuildScene);
-  bindSelect('gear-type','gearType', rebuildScene);
-  bindSlider('gear-strut','gear-strut-num','gearStrut', rebuildScene);
-  bindSlider('gear-radius','gear-radius-num','gearRadius', rebuildScene);
-
-  // Material
-  document.getElementById('material-select').addEventListener('change', e => {
-    state.material = e.target.value;
-    rebuildScene();
-    console.log(`[AeroCAD] Material=${e.target.value}`);
-  });
-}
-
-// ─── API ──────────────────────────────────────────────────────────────────────
-const API = '/api';
-
-async function checkHealth() {
+/** Pulse the connection dot and text based on backend reachability. */
+async function checkConnection() {
+  const dot  = document.getElementById('statusDot');
+  const text = document.getElementById('statusText');
+  dot.className  = 'dot checking';
+  text.textContent = 'Connecting…';
   try {
-    const r = await fetch(`${API}/healthz`);
-    const ok = r.ok;
-    document.getElementById('status-dot').className = 'status-dot ' + (ok ? 'online' : 'offline');
-    document.getElementById('status-label').textContent = ok ? 'Online' : 'Offline';
+    const r = await fetch(`${API_BASE}/api/health`, { signal: AbortSignal.timeout(4000) });
+    if (r.ok) {
+      dot.className  = 'dot online';
+      text.textContent = 'Connected';
+      await refreshProjectList();
+    } else throw new Error('not ok');
   } catch {
-    document.getElementById('status-dot').className = 'status-dot offline';
-    document.getElementById('status-label').textContent = 'Offline';
+    dot.className  = 'dot offline';
+    text.textContent = 'Offline (local mode)';
   }
 }
 
-async function loadProjectList() {
+/** Save current parameters to backend. */
+async function saveProject() {
+  const projectName = document.getElementById('projectNameInput').value.trim() || 'Unnamed';
+  const payload = {
+    projectName,
+    geometry: { ...p },
+    metadata: { savedAt: new Date().toISOString() },
+  };
   try {
-    const r = await fetch(`${API}/projects`);
-    if (!r.ok) return;
-    const list = await r.json();
-    const sel = document.getElementById('project-load-select');
-    sel.innerHTML = '<option value="">Load Project...</option>';
-    list.forEach(p => {
-      const opt = document.createElement('option');
-      opt.value = p.id; opt.textContent = p.projectName;
-      sel.appendChild(opt);
-    });
-  } catch (e) { console.warn('[AeroCAD] Project list error:', e.message); }
-}
-
-document.getElementById('btn-save').addEventListener('click', async () => {
-  const name = document.getElementById('project-name-input').value.trim() || 'Untitled';
-  const payload = { projectName: name, geometry: { ...state } };
-  try {
-    const r = await fetch(`${API}/projects`, {
+    const r = await fetch(`${API_BASE}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const saved = await r.json();
-    showNotification(`Saved "${name}" (${saved.id.slice(0,8)}…)`, 'success');
-    await loadProjectList();
-    console.log('[AeroCAD] Saved:', saved.id);
-  } catch (e) {
-    showNotification(`Save failed: ${e.message}`, 'error');
+    const data = await r.json();
+    console.log('[API] Saved project:', data.id);
+    showToast(`Project "${projectName}" saved!`);
+    await refreshProjectList();
+  } catch (err) {
+    console.error('[API] Save failed:', err);
+    showToast('Save failed — is the backend running?');
   }
-});
+}
 
-document.getElementById('btn-load').addEventListener('click', async () => {
-  const id = document.getElementById('project-load-select').value;
-  if (!id) { showNotification('Select a project to load', 'error'); return; }
+/** Refresh the project dropdown list. */
+async function refreshProjectList() {
   try {
-    const r = await fetch(`${API}/projects/${id}`);
+    const r    = await fetch(`${API_BASE}/api/projects`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return;
+    const list = await r.json();
+    const sel  = document.getElementById('loadSelect');
+    // Preserve current selection
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">Load project…</option>';
+    list.forEach(proj => {
+      const opt    = document.createElement('option');
+      opt.value    = proj.id;
+      opt.textContent = proj.projectName;
+      sel.appendChild(opt);
+    });
+    if (prev) sel.value = prev;
+  } catch { /* offline */ }
+}
+
+/** Load selected project from backend and apply parameters. */
+async function loadProject() {
+  const id = document.getElementById('loadSelect').value;
+  if (!id) { showToast('Select a project to load.'); return; }
+  try {
+    const r    = await fetch(`${API_BASE}/api/projects/${id}`, { signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const project = await r.json();
-    const g = project.geometry;
-    // Merge geometry into state
-    for (const key of Object.keys(state)) {
-      if (g[key] !== undefined) state[key] = g[key];
-    }
+    const data = await r.json();
+    const geo  = data.geometry || {};
+
+    // Apply all loaded params to state
+    Object.keys(p).forEach(k => {
+      if (geo[k] !== undefined) p[k] = geo[k];
+    });
+
+    document.getElementById('projectNameInput').value = data.projectName || '';
     syncUIFromState();
-    rebuildScene();
-    document.getElementById('project-name-input').value = project.projectName;
-    showNotification(`Loaded "${project.projectName}"`, 'success');
-    console.log('[AeroCAD] Loaded:', id);
-  } catch (e) {
-    showNotification(`Load failed: ${e.message}`, 'error');
+    rebuildAll();
+    showToast(`Loaded "${data.projectName}"!`);
+    console.log('[API] Loaded project:', id);
+  } catch (err) {
+    console.error('[API] Load failed:', err);
+    showToast('Load failed — project not found or backend offline.');
   }
-});
+}
 
-// ─── Export STL ───────────────────────────────────────────────────────────────
-document.getElementById('btn-export').addEventListener('click', () => {
-  const exporter = new STLExporter();
-  const group = new THREE.Group();
-
-  for (const [key, meshes] of Object.entries(meshGroups)) {
-    if (key === 'cog') continue;
-    for (const m of meshes) {
-      if (m.isGroup) {
-        m.traverse(child => { if (child.isMesh) group.add(child.clone()); });
-      } else if (m.isMesh) {
-        group.add(m.clone());
-      }
-    }
+/** Delete selected project from backend. */
+async function deleteProject() {
+  const id = document.getElementById('loadSelect').value;
+  if (!id) { showToast('Select a project to delete.'); return; }
+  try {
+    const r = await fetch(`${API_BASE}/api/projects/${id}`, { method: 'DELETE', signal: AbortSignal.timeout(4000) });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    showToast('Project deleted.');
+    await refreshProjectList();
+  } catch (err) {
+    console.error('[API] Delete failed:', err);
+    showToast('Delete failed.');
   }
+}
 
-  const stl = exporter.parse(group, { binary: false });
-  const blob = new Blob([stl], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `aerocad_${document.getElementById('project-name-input').value || 'export'}.stl`;
-  a.click();
-  URL.revokeObjectURL(url);
-  showNotification('STL exported', 'success');
-  console.log('[AeroCAD] STL exported');
-});
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. UI EVENT LISTENERS & SYNC
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─── Screenshot PNG ───────────────────────────────────────────────────────────
-document.getElementById('btn-screenshot').addEventListener('click', () => {
-  renderer.render(scene, camera);
-  canvas.toBlob(blob => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `aerocad_${Date.now()}.png`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showNotification('Screenshot saved as PNG', 'success');
+/**
+ * Wire a slider + number input pair to a state key and rebuild callback.
+ * Both inputs stay in sync. On change, the state is updated and rebuild() called.
+ */
+function bindSliderPair(sliderId, numId, stateKey, rebuild = rebuildAll) {
+  const slider = document.getElementById(sliderId);
+  const num    = document.getElementById(numId);
+  if (!slider || !num) return;
+
+  const update = (val) => {
+    const v = parseFloat(val);
+    if (!isFinite(v)) return;
+    p[stateKey] = v;
+    console.log(`[UI] ${stateKey} = ${v}`);
+    rebuild();
+  };
+
+  slider.addEventListener('input', () => {
+    num.value = slider.value;
+    update(slider.value);
   });
-});
+  num.addEventListener('change', () => {
+    slider.value = num.value;
+    update(num.value);
+  });
+}
 
-// ─── Notification ─────────────────────────────────────────────────────────────
-let notifTimer = null;
-function showNotification(msg, type = 'info') {
-  const el = document.getElementById('notification');
+/** Apply current state p back into all UI controls. */
+function syncUIFromState() {
+  const setSlider = (sid, nid, val) => {
+    const s = document.getElementById(sid);
+    const n = document.getElementById(nid);
+    if (s) s.value = val;
+    if (n) n.value = val;
+  };
+  setSlider('wingspanSlider',  'wingspanNum',  p.wingspan);
+  setSlider('chordSlider',     'chordNum',     p.chord);
+  setSlider('taperSlider',     'taperNum',     p.taperRatio);
+  setSlider('sweepSlider',     'sweepNum',     p.sweep);
+  setSlider('dihedralSlider',  'dihedralNum',  p.dihedral);
+  setSlider('twistSlider',     'twistNum',     p.twistAngle);
+  setSlider('fuseLengthSlider','fuseLengthNum',p.fuseLength);
+  setSlider('fuseDiamSlider',  'fuseDiamNum',  p.fuseDiam);
+  setSlider('noseSharpSlider', 'noseSharpNum', p.noseConeSharpness);
+  document.getElementById('nacaInput').value   = p.naca;
+  document.getElementById('materialSelect').value = p.material;
+}
+
+function setupUI() {
+  // ── Slider pairs ──
+  bindSliderPair('wingspanSlider',  'wingspanNum',  'wingspan',          updateWing);
+  bindSliderPair('chordSlider',     'chordNum',     'chord',             updateWing);
+  bindSliderPair('taperSlider',     'taperNum',     'taperRatio',        updateWing);
+  bindSliderPair('sweepSlider',     'sweepNum',     'sweep',             updateWing);
+  bindSliderPair('dihedralSlider',  'dihedralNum',  'dihedral',          updateWing);
+  bindSliderPair('twistSlider',     'twistNum',     'twistAngle',        updateWing);
+  bindSliderPair('fuseLengthSlider','fuseLengthNum','fuseLength',        updateFuselage);
+  bindSliderPair('fuseDiamSlider',  'fuseDiamNum',  'fuseDiam',          updateFuselage);
+  bindSliderPair('noseSharpSlider', 'noseSharpNum', 'noseConeSharpness', updateFuselage);
+
+  // ── NACA input ──
+  const nacaApplyBtn = document.getElementById('nacaApplyBtn');
+  const nacaInput    = document.getElementById('nacaInput');
+  const applyNaca = () => {
+    const raw = nacaInput.value.trim();
+    if (!/^\d{4}$/.test(raw)) {
+      showToast('NACA code must be exactly 4 digits (e.g. 2412)');
+      return;
+    }
+    p.naca = raw;
+    console.log('[UI] NACA =', raw);
+    updateWing();
+  };
+  nacaApplyBtn.addEventListener('click', applyNaca);
+  nacaInput.addEventListener('keydown', e => { if (e.key === 'Enter') applyNaca(); });
+
+  // ── Material ──
+  document.getElementById('materialSelect').addEventListener('change', e => {
+    p.material = e.target.value;
+    console.log('[UI] material =', p.material);
+    applyMaterialColor();
+    updateTelemetry();
+  });
+
+  // ── Opacity ──
+  document.getElementById('opacitySlider').addEventListener('input', e => {
+    const o = parseFloat(e.target.value);
+    wingMat.transparent = o < 1;
+    wingMat.opacity     = o;
+    fuseMat.transparent = o < 1;
+    fuseMat.opacity     = o;
+  });
+
+  // ── Grid size ──
+  const gridSlider = document.getElementById('gridSlider');
+  const gridNum    = document.getElementById('gridNum');
+  const updateGrid = (val) => {
+    const v = parseInt(val);
+    if (isFinite(v)) rebuildGrid(v);
+  };
+  gridSlider.addEventListener('input', () => { gridNum.value = gridSlider.value; updateGrid(gridSlider.value); });
+  gridNum.addEventListener('change',   () => { gridSlider.value = gridNum.value; updateGrid(gridNum.value); });
+
+  // ── Toolbar buttons ──
+  document.getElementById('saveBtn').addEventListener('click', saveProject);
+  document.getElementById('loadBtn').addEventListener('click', loadProject);
+  document.getElementById('deleteBtn').addEventListener('click', deleteProject);
+  document.getElementById('exportBtn').addEventListener('click', exportSTL);
+
+  // ── Frame All ──
+  document.getElementById('frameBtn').addEventListener('click', () => {
+    const box = new THREE.Box3().setFromObject(sceneGroup);
+    if (box.isEmpty()) return;
+    const center = new THREE.Vector3();
+    const size   = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const dist   = maxDim / (2 * Math.tan((camera.fov / 2) * Math.PI / 180)) * 1.5;
+    camera.position.set(center.x + dist * 0.6, center.y + dist * 0.4, center.z + dist * 0.8);
+    camera.lookAt(center);
+    controls.target.copy(center);
+    controls.update();
+  });
+
+  // ── Wireframe Toggle ──
+  document.getElementById('wireframeToggle').addEventListener('click', function () {
+    wireframeMode = !wireframeMode;
+    wingMat.wireframe = wireframeMode;
+    fuseMat.wireframe = wireframeMode;
+    this.textContent  = wireframeMode ? 'Solid' : 'Wireframe';
+    this.style.color  = wireframeMode ? 'var(--accent)' : '';
+  });
+
+  // ── Assembly Tree visibility toggles ──
+  document.querySelectorAll('.tree-item').forEach(item => {
+    const visBtn = item.querySelector('.tree-vis');
+    if (!visBtn) return;
+    visBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const part = item.dataset.part;
+      let mesh;
+      if (part === 'fuselage')   mesh = fuseMesh;
+      if (part === 'wing-left')  mesh = wingMeshLeft;
+      if (part === 'wing-right') mesh = wingMeshRight;
+      if (part === 'cog')        mesh = cogMarker;
+      if (!mesh) return;
+      mesh.visible = !mesh.visible;
+      item.classList.toggle('hidden', !mesh.visible);
+    });
+    // Click row to select (highlight) in tree
+    item.addEventListener('click', () => {
+      document.querySelectorAll('.tree-item').forEach(i => i.classList.remove('selected'));
+      item.classList.add('selected');
+    });
+  });
+
+  // ── Keyboard shortcuts ──
+  window.addEventListener('keydown', e => {
+    // F = frame all
+    if (e.key === 'f' || e.key === 'F') document.getElementById('frameBtn').click();
+    // W = wireframe
+    if (e.key === 'w' || e.key === 'W') document.getElementById('wireframeToggle').click();
+    // S + Ctrl = save
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveProject(); }
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. TOAST NOTIFICATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
   el.textContent = msg;
-  el.className = `notification ${type}`;
-  clearTimeout(notifTimer);
-  notifTimer = setTimeout(() => el.classList.add('hidden'), 3500);
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
-// ─── Resize ───────────────────────────────────────────────────────────────────
-function onResize() {
-  const w = window.innerWidth, h = window.innerHeight;
-  renderer.setSize(w, h);
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-}
-window.addEventListener('resize', onResize);
-onResize();
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. ANIMATION LOOP
+// ─────────────────────────────────────────────────────────────────────────────
 
-// ─── Render Loop ──────────────────────────────────────────────────────────────
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
   renderer.render(scene, camera);
 }
 
-// ─── Init ─────────────────────────────────────────────────────────────────────
-bindAll();
-rebuildScene();
-checkHealth();
-loadProjectList();
-setInterval(checkHealth, 10000);
-animate();
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. BOOTSTRAP
+// ─────────────────────────────────────────────────────────────────────────────
+
+(function main() {
+  initScene();
+  setupUI();
+  rebuildAll();
+  animate();
+
+  // Check backend connectivity and load project list
+  checkConnection();
+  // Re-check every 15 seconds
+  setInterval(checkConnection, 15_000);
+
+  console.log('[CAD] AeroCAD initialised — Three.js r160');
+})();
