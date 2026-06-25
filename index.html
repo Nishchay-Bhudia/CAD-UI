@@ -3,355 +3,235 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AeroCAD — Conceptual Aerospace Design</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css" />
+  <title>AeroCAD — Aerospace Conceptual Design</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+
+  <!-- Three.js ES Module Import Map -->
   <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.166.1/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.166.1/examples/jsm/"
-      }
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
     }
+  }
   </script>
 </head>
 <body>
 
+  <!-- ── 3D Viewport ── -->
   <canvas id="viewport"></canvas>
 
-  <!-- Top Bar -->
+  <!-- ── Top Bar ── -->
   <div id="topbar">
-    <div id="topbar-left">
-      <span class="logo-text">AERO<span class="logo-accent">CAD</span></span>
-      <div class="status-pill">
-        <span class="status-dot" id="status-dot"></span>
-        <span class="status-label" id="status-label">Connecting...</span>
-      </div>
+    <div class="brand">⚡ AeroCAD</div>
+
+    <div class="project-controls">
+      <input id="projectNameInput" type="text" placeholder="Project name…" />
+      <button id="saveBtn" class="btn">Save</button>
+      <select id="loadSelect">
+        <option value="">Load project…</option>
+      </select>
+      <button id="loadBtn" class="btn">Load</button>
+      <button id="deleteBtn" class="btn btn-amber">Delete</button>
+      <button id="exportBtn" class="btn btn-amber">Export STL</button>
     </div>
-    <div id="topbar-center">
-      <input type="text" id="project-name-input" placeholder="Project Name" value="Jet1" />
-      <button class="btn btn-primary" id="btn-save">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-        Save
-      </button>
-      <div class="select-group">
-        <select id="project-load-select"><option value="">Load Project...</option></select>
-        <button class="btn btn-secondary" id="btn-load">Load</button>
-      </div>
-      <button class="btn btn-accent" id="btn-export">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        STL
-      </button>
-      <button class="btn btn-secondary" id="btn-screenshot" title="Capture screenshot">
-        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        PNG
-      </button>
-    </div>
-    <div id="topbar-right">
-      <!-- Camera Presets -->
-      <div class="cam-presets">
-        <button class="cam-btn" data-cam="iso" title="Isometric">ISO</button>
-        <button class="cam-btn" data-cam="top" title="Top View">TOP</button>
-        <button class="cam-btn" data-cam="front" title="Front View">FRT</button>
-        <button class="cam-btn" data-cam="side" title="Side View">SDE</button>
-        <button class="cam-btn" data-cam="rear" title="Rear View">RER</button>
-      </div>
-      <!-- View Mode -->
-      <div class="view-mode-group">
-        <button class="view-btn active" data-mode="solid" title="Solid">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-        </button>
-        <button class="view-btn" data-mode="wireframe" title="Wireframe">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
-        </button>
-        <button class="view-btn" data-mode="xray" title="X-Ray">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" opacity="0.4"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
-        </button>
-      </div>
+
+    <div class="connection-status">
+      <span id="statusDot" class="dot checking"></span>
+      <span id="statusText">Connecting…</span>
     </div>
   </div>
 
-  <!-- Left Sidebar — Assembly Tree -->
-  <div id="left-sidebar">
-    <div class="sidebar-header">
-      <span class="sidebar-title">Assembly Tree</span>
-      <button class="collapse-btn" id="left-collapse">‹</button>
-    </div>
-    <div id="assembly-tree">
-      <div class="tree-section-label">Structure</div>
-      <div class="tree-item" data-part="fuselage">
-        <span class="vis-toggle" data-target="fuselage" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="8" width="18" height="8" rx="4"/></svg>
-        Fuselage
-      </div>
-      <div class="tree-item" data-part="canopy">
-        <span class="vis-toggle" data-target="canopy" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15 Q12 4 20 15"/></svg>
-        Cockpit Canopy
-      </div>
-      <div class="tree-section-label">Lifting Surfaces</div>
-      <div class="tree-item" data-part="wing-right">
-        <span class="vis-toggle" data-target="wings" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="2 20 12 4 22 20"/></svg>
-        Main Wings
-      </div>
-      <div class="tree-item" data-part="winglets">
-        <span class="vis-toggle" data-target="winglets" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="20" x2="12" y2="4"/></svg>
-        Winglets
-      </div>
-      <div class="tree-item" data-part="hstab">
-        <span class="vis-toggle" data-target="hstab" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="2 16 12 6 22 16"/></svg>
-        Horiz. Stabilizer
-      </div>
-      <div class="tree-item" data-part="vstab">
-        <span class="vis-toggle" data-target="vstab" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 4 6 20 18 20"/></svg>
-        Vert. Stabilizer
-      </div>
-      <div class="tree-section-label">Propulsion</div>
-      <div class="tree-item" data-part="engines">
-        <span class="vis-toggle" data-target="engines" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/></svg>
-        Engine Nacelles
-      </div>
-      <div class="tree-section-label">Undercarriage</div>
-      <div class="tree-item" data-part="gear">
-        <span class="vis-toggle" data-target="gear" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="18" r="3"/><circle cx="17" cy="18" r="3"/><line x1="7" y1="15" x2="7" y2="8"/><line x1="17" y1="15" x2="17" y2="8"/></svg>
-        Landing Gear
-      </div>
-      <div class="tree-section-label">Reference</div>
-      <div class="tree-item" data-part="cog">
-        <span class="vis-toggle" data-target="cog" title="Toggle visibility">◉</span>
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/></svg>
-        Center of Gravity
-      </div>
+  <!-- ── Left Sidebar: Assembly Tree ── -->
+  <div id="leftSidebar">
+    <div class="sidebar-header">Assembly Tree</div>
+    <ul class="assembly-tree" id="assemblyTree">
+      <li class="tree-item active" data-part="fuselage">
+        <span class="tree-icon">▶</span>
+        <span class="tree-label">Fuselage</span>
+        <span class="tree-vis" title="Toggle visibility">👁</span>
+      </li>
+      <li class="tree-item active" data-part="wing-left">
+        <span class="tree-icon">▶</span>
+        <span class="tree-label">Wing (Left)</span>
+        <span class="tree-vis" title="Toggle visibility">👁</span>
+      </li>
+      <li class="tree-item active" data-part="wing-right">
+        <span class="tree-icon">▶</span>
+        <span class="tree-label">Wing (Right)</span>
+        <span class="tree-vis" title="Toggle visibility">👁</span>
+      </li>
+      <li class="tree-item active" data-part="cog">
+        <span class="tree-icon">●</span>
+        <span class="tree-label">CoG Marker</span>
+        <span class="tree-vis" title="Toggle visibility">👁</span>
+      </li>
+    </ul>
+    <div class="sidebar-footer">
+      <button id="frameBtn" class="btn-outline">Frame All</button>
+      <button id="wireframeToggle" class="btn-outline">Wireframe</button>
     </div>
   </div>
 
-  <!-- Right Sidebar — Control Panel -->
-  <div id="right-sidebar">
-    <div class="sidebar-header">
-      <button class="collapse-btn" id="right-collapse">›</button>
-      <span class="sidebar-title">Parameters</span>
-    </div>
+  <!-- ── Right Sidebar: Parametric Controls ── -->
+  <div id="rightSidebar">
 
-    <!-- FUSELAGE -->
-    <div class="control-group">
-      <div class="group-title">⬛ Fuselage</div>
-      <div class="slider-row"><label>Length <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="fuse-length" min="5" max="80" step="0.5" value="20"><input type="number" class="num-input" id="fuse-length-num" min="5" max="80" step="0.5" value="20"></div></div>
-      <div class="slider-row"><label>Diameter <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="fuse-diameter" min="0.5" max="12" step="0.1" value="2.5"><input type="number" class="num-input" id="fuse-diameter-num" min="0.5" max="12" step="0.1" value="2.5"></div></div>
-      <div class="slider-row"><label>Nose Sharpness</label>
-        <div class="input-row"><input type="range" id="fuse-nose" min="0.5" max="5" step="0.1" value="2"><input type="number" class="num-input" id="fuse-nose-num" min="0.5" max="5" step="0.1" value="2"></div></div>
-      <div class="slider-row"><label>Tail Taper</label>
-        <div class="input-row"><input type="range" id="fuse-taper" min="0.1" max="1" step="0.05" value="0.4"><input type="number" class="num-input" id="fuse-taper-num" min="0.1" max="1" step="0.05" value="0.4"></div></div>
-    </div>
+    <!-- Airfoil & Wing Section -->
+    <div class="panel-section">
+      <h3>Airfoil &amp; Wing</h3>
 
-    <!-- COCKPIT CANOPY -->
-    <div class="control-group">
-      <div class="group-title">◎ Cockpit Canopy</div>
-      <div class="toggle-row">
-        <label>Show Canopy</label>
-        <label class="toggle"><input type="checkbox" id="canopy-show" checked><span class="toggle-slider"></span></label>
-      </div>
-      <div class="slider-row"><label>Length <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="canopy-length" min="1" max="8" step="0.1" value="3"><input type="number" class="num-input" id="canopy-length-num" min="1" max="8" step="0.1" value="3"></div></div>
-      <div class="slider-row"><label>Width <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="canopy-width" min="0.5" max="4" step="0.1" value="1.4"><input type="number" class="num-input" id="canopy-width-num" min="0.5" max="4" step="0.1" value="1.4"></div></div>
-      <div class="slider-row"><label>Height <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="canopy-height" min="0.3" max="2.5" step="0.1" value="0.9"><input type="number" class="num-input" id="canopy-height-num" min="0.3" max="2.5" step="0.1" value="0.9"></div></div>
-    </div>
-
-    <!-- MAIN WINGS -->
-    <div class="control-group">
-      <div class="group-title">▲ Main Wings</div>
-      <div class="slider-row"><label>NACA Profile</label>
-        <div class="input-row naca-row">
-          <input type="text" id="naca-code" class="naca-input" value="2412" maxlength="4" placeholder="2412">
-          <button class="btn btn-small" id="btn-apply-naca">Apply</button>
+      <div class="field">
+        <label>NACA 4-Digit Profile</label>
+        <div class="naca-row">
+          <input type="text" id="nacaInput" value="2412" maxlength="4" spellcheck="false" />
+          <button id="nacaApplyBtn" class="btn-sm">Apply</button>
         </div>
       </div>
-      <div class="slider-row"><label>Wingspan <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="wing-span" min="2" max="100" step="0.5" value="30"><input type="number" class="num-input" id="wing-span-num" min="2" max="100" step="0.5" value="30"></div></div>
-      <div class="slider-row"><label>Root Chord <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="wing-chord" min="0.5" max="20" step="0.1" value="3.5"><input type="number" class="num-input" id="wing-chord-num" min="0.5" max="20" step="0.1" value="3.5"></div></div>
-      <div class="slider-row"><label>Taper Ratio</label>
-        <div class="input-row"><input type="range" id="wing-taper" min="0.1" max="1" step="0.05" value="0.45"><input type="number" class="num-input" id="wing-taper-num" min="0.1" max="1" step="0.05" value="0.45"></div></div>
-      <div class="slider-row"><label>Sweep Angle <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="wing-sweep" min="0" max="70" step="1" value="25"><input type="number" class="num-input" id="wing-sweep-num" min="0" max="70" step="1" value="25"></div></div>
-      <div class="slider-row"><label>Dihedral <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="wing-dihedral" min="-10" max="20" step="0.5" value="5"><input type="number" class="num-input" id="wing-dihedral-num" min="-10" max="20" step="0.5" value="5"></div></div>
-      <div class="slider-row"><label>Wing Position <span class="unit">%</span></label>
-        <div class="input-row"><input type="range" id="wing-pos" min="0" max="100" step="1" value="38"><input type="number" class="num-input" id="wing-pos-num" min="0" max="100" step="1" value="38"></div></div>
-    </div>
 
-    <!-- WINGLETS -->
-    <div class="control-group">
-      <div class="group-title">↑ Winglets</div>
-      <div class="toggle-row">
-        <label>Show Winglets</label>
-        <label class="toggle"><input type="checkbox" id="winglets-show"><span class="toggle-slider"></span></label>
+      <div class="field">
+        <label>Wingspan <span class="unit">m</span></label>
+        <input type="range" id="wingspanSlider" min="2" max="60" step="0.1" value="10" />
+        <input type="number" id="wingspanNum" min="2" max="60" step="0.1" value="10" />
       </div>
-      <div class="slider-row"><label>Height <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="winglet-height" min="0.3" max="5" step="0.1" value="2"><input type="number" class="num-input" id="winglet-height-num" min="0.3" max="5" step="0.1" value="2"></div></div>
-      <div class="slider-row"><label>Cant Angle <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="winglet-cant" min="45" max="90" step="1" value="75"><input type="number" class="num-input" id="winglet-cant-num" min="45" max="90" step="1" value="75"></div></div>
-      <div class="slider-row"><label>Sweep <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="winglet-sweep" min="0" max="60" step="1" value="35"><input type="number" class="num-input" id="winglet-sweep-num" min="0" max="60" step="1" value="35"></div></div>
+
+      <div class="field">
+        <label>Root Chord <span class="unit">m</span></label>
+        <input type="range" id="chordSlider" min="0.5" max="12" step="0.05" value="2" />
+        <input type="number" id="chordNum" min="0.5" max="12" step="0.05" value="2" />
+      </div>
+
+      <div class="field">
+        <label>Taper Ratio <span class="unit">tip/root</span></label>
+        <input type="range" id="taperSlider" min="0.15" max="1.0" step="0.01" value="1.0" />
+        <input type="number" id="taperNum" min="0.15" max="1.0" step="0.01" value="1.0" />
+      </div>
+
+      <div class="field">
+        <label>Sweep Angle <span class="unit">°</span></label>
+        <input type="range" id="sweepSlider" min="-10" max="70" step="0.5" value="15" />
+        <input type="number" id="sweepNum" min="-10" max="70" step="0.5" value="15" />
+      </div>
+
+      <div class="field">
+        <label>Dihedral <span class="unit">°</span></label>
+        <input type="range" id="dihedralSlider" min="-15" max="20" step="0.5" value="5" />
+        <input type="number" id="dihedralNum" min="-15" max="20" step="0.5" value="5" />
+      </div>
+
+      <div class="field">
+        <label>Washout / Twist <span class="unit">°</span></label>
+        <input type="range" id="twistSlider" min="-12" max="12" step="0.5" value="0" />
+        <input type="number" id="twistNum" min="-12" max="12" step="0.5" value="0" />
+      </div>
     </div>
 
-    <!-- HORIZONTAL STABILIZER -->
-    <div class="control-group">
-      <div class="group-title">— H-Stabilizer</div>
-      <div class="slider-row"><label>Span <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="hstab-span" min="1" max="30" step="0.25" value="8"><input type="number" class="num-input" id="hstab-span-num" min="1" max="30" step="0.25" value="8"></div></div>
-      <div class="slider-row"><label>Chord <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="hstab-chord" min="0.3" max="8" step="0.1" value="1.5"><input type="number" class="num-input" id="hstab-chord-num" min="0.3" max="8" step="0.1" value="1.5"></div></div>
-      <div class="slider-row"><label>Sweep <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="hstab-sweep" min="0" max="60" step="1" value="30"><input type="number" class="num-input" id="hstab-sweep-num" min="0" max="60" step="1" value="30"></div></div>
-      <div class="slider-row"><label>Dihedral <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="hstab-dihedral" min="-5" max="15" step="0.5" value="3"><input type="number" class="num-input" id="hstab-dihedral-num" min="-5" max="15" step="0.5" value="3"></div></div>
+    <!-- Fuselage Section -->
+    <div class="panel-section">
+      <h3>Fuselage</h3>
+
+      <div class="field">
+        <label>Length <span class="unit">m</span></label>
+        <input type="range" id="fuseLengthSlider" min="2" max="40" step="0.1" value="8" />
+        <input type="number" id="fuseLengthNum" min="2" max="40" step="0.1" value="8" />
+      </div>
+
+      <div class="field">
+        <label>Max Diameter <span class="unit">m</span></label>
+        <input type="range" id="fuseDiamSlider" min="0.2" max="8" step="0.05" value="1.2" />
+        <input type="number" id="fuseDiamNum" min="0.2" max="8" step="0.05" value="1.2" />
+      </div>
+
+      <div class="field">
+        <label>Nose Fineness <span class="unit">ratio</span></label>
+        <input type="range" id="noseSharpSlider" min="0.5" max="6" step="0.1" value="2" />
+        <input type="number" id="noseSharpNum" min="0.5" max="6" step="0.1" value="2" />
+      </div>
     </div>
 
-    <!-- VERTICAL STABILIZER -->
-    <div class="control-group">
-      <div class="group-title">| V-Stabilizer</div>
-      <div class="slider-row"><label>Height <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="vstab-height" min="0.5" max="15" step="0.1" value="4"><input type="number" class="num-input" id="vstab-height-num" min="0.5" max="15" step="0.1" value="4"></div></div>
-      <div class="slider-row"><label>Root Chord <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="vstab-chord" min="0.5" max="10" step="0.1" value="2.5"><input type="number" class="num-input" id="vstab-chord-num" min="0.5" max="10" step="0.1" value="2.5"></div></div>
-      <div class="slider-row"><label>Sweep <span class="unit">°</span></label>
-        <div class="input-row"><input type="range" id="vstab-sweep" min="0" max="70" step="1" value="40"><input type="number" class="num-input" id="vstab-sweep-num" min="0" max="70" step="1" value="40"></div></div>
-      <div class="slider-row"><label>Taper Ratio</label>
-        <div class="input-row"><input type="range" id="vstab-taper" min="0.1" max="1" step="0.05" value="0.35"><input type="number" class="num-input" id="vstab-taper-num" min="0.1" max="1" step="0.05" value="0.35"></div></div>
-    </div>
-
-    <!-- ENGINES -->
-    <div class="control-group">
-      <div class="group-title">◎ Engine Nacelles</div>
-      <div class="slider-row"><label>Engine Count</label>
-        <select class="material-select" id="engine-count">
-          <option value="0">0 — Glider / Unpowered</option>
-          <option value="1">1 — Single Engine</option>
-          <option value="2" selected>2 — Twin Engine</option>
-          <option value="4">4 — Four Engine</option>
+    <!-- Material Section -->
+    <div class="panel-section">
+      <h3>Material</h3>
+      <div class="field">
+        <select id="materialSelect">
+          <option value="aluminum">Aluminum 7075 — 2.81 g/cm³</option>
+          <option value="titanium">Titanium Grade 5 — 4.43 g/cm³</option>
+          <option value="carbonFiber">Carbon Fiber Composite — 1.60 g/cm³</option>
         </select>
       </div>
-      <div class="slider-row"><label>Mount Position</label>
-        <select class="material-select" id="engine-pos">
-          <option value="underwing" selected>Under-Wing Pylon</option>
-          <option value="rear">Rear Fuselage</option>
-          <option value="top">Dorsal (Top)</option>
-          <option value="nose">Nose (Prop)</option>
-        </select>
-      </div>
-      <div class="slider-row"><label>Fan Diameter <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="engine-diameter" min="0.3" max="4" step="0.05" value="1.2"><input type="number" class="num-input" id="engine-diameter-num" min="0.3" max="4" step="0.05" value="1.2"></div></div>
-      <div class="slider-row"><label>Length <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="engine-length" min="1" max="10" step="0.1" value="4"><input type="number" class="num-input" id="engine-length-num" min="1" max="10" step="0.1" value="4"></div></div>
-      <div class="slider-row"><label>Span Position <span class="unit">%</span></label>
-        <div class="input-row"><input type="range" id="engine-spanpos" min="5" max="80" step="1" value="35"><input type="number" class="num-input" id="engine-spanpos-num" min="5" max="80" step="1" value="35"></div></div>
     </div>
 
-    <!-- LANDING GEAR -->
-    <div class="control-group">
-      <div class="group-title">⊕ Landing Gear</div>
-      <div class="toggle-row">
-        <label>Show Gear</label>
-        <label class="toggle"><input type="checkbox" id="gear-show" checked><span class="toggle-slider"></span></label>
+    <!-- Display Options -->
+    <div class="panel-section">
+      <h3>Display</h3>
+      <div class="field">
+        <label>Opacity</label>
+        <input type="range" id="opacitySlider" min="0.1" max="1.0" step="0.01" value="1.0" />
       </div>
-      <div class="slider-row"><label>Gear Type</label>
-        <select class="material-select" id="gear-type">
-          <option value="tricycle" selected>Tricycle (Nose + Main)</option>
-          <option value="taildragger">Taildragger</option>
-          <option value="tandem">Tandem</option>
-        </select>
+      <div class="field">
+        <label>Grid Size <span class="unit">m</span></label>
+        <input type="range" id="gridSlider" min="10" max="200" step="10" value="60" />
+        <input type="number" id="gridNum" min="10" max="200" step="10" value="60" />
       </div>
-      <div class="slider-row"><label>Strut Length <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="gear-strut" min="0.3" max="4" step="0.1" value="1.2"><input type="number" class="num-input" id="gear-strut-num" min="0.3" max="4" step="0.1" value="1.2"></div></div>
-      <div class="slider-row"><label>Wheel Radius <span class="unit">m</span></label>
-        <div class="input-row"><input type="range" id="gear-radius" min="0.1" max="1.5" step="0.05" value="0.4"><input type="number" class="num-input" id="gear-radius-num" min="0.1" max="1.5" step="0.05" value="0.4"></div></div>
     </div>
 
-    <!-- MATERIAL -->
-    <div class="control-group">
-      <div class="group-title">◆ Material</div>
-      <select id="material-select" class="material-select">
-        <option value="aluminum">Aluminum 7075 — 2.81 g/cm³</option>
-        <option value="titanium">Titanium Grade 5 — 4.43 g/cm³</option>
-        <option value="carbon">Carbon Fiber — 1.60 g/cm³</option>
-        <option value="steel">Steel 4340 — 7.85 g/cm³</option>
-        <option value="inconel">Inconel 718 — 8.19 g/cm³</option>
-        <option value="magnesium">Magnesium AZ31 — 1.77 g/cm³</option>
-      </select>
+  </div>
+
+  <!-- ── Bottom Panel: Telemetry ── -->
+  <div id="bottomPanel">
+    <div class="telem-block">
+      <span class="telem-label">Total Mass</span>
+      <span class="telem-val" id="t-mass">—</span>
+      <span class="telem-unit">kg</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">Wing Mass</span>
+      <span class="telem-val" id="t-wingmass">—</span>
+      <span class="telem-unit">kg</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">Fuse Mass</span>
+      <span class="telem-val" id="t-fusemass">—</span>
+      <span class="telem-unit">kg</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">Wing Area</span>
+      <span class="telem-val" id="t-wingarea">—</span>
+      <span class="telem-unit">m²</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">Aspect Ratio</span>
+      <span class="telem-val" id="t-ar">—</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">Wing Volume</span>
+      <span class="telem-val" id="t-wingvol">—</span>
+      <span class="telem-unit">m³</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">Fuse Volume</span>
+      <span class="telem-val" id="t-fusevol">—</span>
+      <span class="telem-unit">m³</span>
+    </div>
+    <div class="telem-block">
+      <span class="telem-label">CoG (x,y,z)</span>
+      <span class="telem-val" id="t-cog" style="font-size:11px">—</span>
+      <span class="telem-unit">m</span>
     </div>
   </div>
 
-  <!-- Bottom Telemetry Panel -->
-  <div id="bottom-panel">
-    <div class="telemetry-header">Telemetry &amp; Mass Properties</div>
-    <div class="telemetry-grid">
-      <div class="telemetry-item highlight">
-        <div class="t-label">Est. MTOW</div>
-        <div class="t-value" id="t-mass">—</div>
-        <div class="t-unit">kg</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Wing Ref. Area</div>
-        <div class="t-value" id="t-wing-area">—</div>
-        <div class="t-unit">m²</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Wing Loading</div>
-        <div class="t-value" id="t-wing-load">—</div>
-        <div class="t-unit">kg/m²</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Aspect Ratio</div>
-        <div class="t-value" id="t-ar">—</div>
-        <div class="t-unit">λ</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Fineness L/D</div>
-        <div class="t-value" id="t-fineness">—</div>
-        <div class="t-unit"></div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Wetted Area</div>
-        <div class="t-value" id="t-wetted">—</div>
-        <div class="t-unit">m²</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">CoG X-Pos</div>
-        <div class="t-value" id="t-cog">—</div>
-        <div class="t-unit">m</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">SM %MAC</div>
-        <div class="t-value" id="t-sm">—</div>
-        <div class="t-unit">%</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Volume</div>
-        <div class="t-value" id="t-total-vol">—</div>
-        <div class="t-unit">m³</div>
-      </div>
-      <div class="telemetry-item">
-        <div class="t-label">Material</div>
-        <div class="t-value" id="t-material">Al 7075</div>
-        <div class="t-unit"></div>
-      </div>
-    </div>
+  <!-- ── Axis Labels Overlay ── -->
+  <div id="axisLabels">
+    <span class="ax-x">X +</span>
+    <span class="ax-y">Y ↑</span>
+    <span class="ax-z">Z +</span>
   </div>
 
-  <div id="notification" class="notification hidden"></div>
+  <!-- ── Toast Notification ── -->
+  <div id="toast"></div>
 
-  <script type="module" src="/script.js"></script>
+  <!-- ── Main Script (ES module) ── -->
+  <script type="module" src="script.js"></script>
 </body>
 </html>
