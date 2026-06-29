@@ -737,6 +737,152 @@ export const COMPONENT_CATEGORIES = {
       },
     },
   ],
+  'Missiles & Weapons': [
+    {
+      id: 'missile-body', name: 'Missile / Rocket Body',
+      params: {
+        length:   { label: 'Length (m)',    type: 'number', default: 4.0,  min: 0.1, max: 30 },
+        diameter: { label: 'Diameter (m)',  type: 'number', default: 0.35, min: 0.01, max: 3 },
+        noseLen:  { label: 'Nose Length (m)', type: 'number', default: 0.8, min: 0.05, max: 5 },
+        noseType: { label: 'Nose Shape', type: 'select', default: 'ogive', options: ['ogive','conical','blunt','biconic'] },
+        segs:     { label: 'Segments', type: 'number', default: 24, min: 8, max: 64 },
+      },
+    },
+    {
+      id: 'fin-set', name: 'Fin Set',
+      params: {
+        nFins:     { label: 'Number of Fins', type: 'number', default: 4, min: 2, max: 8 },
+        rootChord: { label: 'Root Chord (m)',  type: 'number', default: 0.25, min: 0.01, max: 2 },
+        tipChord:  { label: 'Tip Chord (m)',   type: 'number', default: 0.1,  min: 0, max: 2 },
+        span:      { label: 'Semi-span (m)',   type: 'number', default: 0.15, min: 0.01, max: 2 },
+        sweep:     { label: 'Sweep (°)',       type: 'number', default: 45,   min: 0, max: 80 },
+        bodyR:     { label: 'Body Radius (m)', type: 'number', default: 0.175, min: 0.01, max: 2 },
+      },
+    },
+    {
+      id: 'warhead', name: 'Warhead / Payload Section',
+      params: {
+        length:   { label: 'Length (m)',   type: 'number', default: 0.6, min: 0.05, max: 5 },
+        diameter: { label: 'Diameter (m)', type: 'number', default: 0.35, min: 0.01, max: 3 },
+      },
+    },
+    {
+      id: 'seeker-dome', name: 'Seeker Dome',
+      params: {
+        radius:   { label: 'Dome Radius (m)',  type: 'number', default: 0.12, min: 0.02, max: 1 },
+        flatRatio:{ label: 'Flat Ratio',       type: 'number', default: 0.5,  min: 0.1, max: 0.95 },
+      },
+    },
+  ],
+  'Helicopters & VTOL': [
+    {
+      id: 'main-rotor', name: 'Main Rotor',
+      params: {
+        radius:   { label: 'Rotor Radius (m)',  type: 'number', default: 5.5, min: 0.5, max: 30 },
+        nBlades:  { label: 'Number of Blades',  type: 'number', default: 4, min: 2, max: 8 },
+        chord:    { label: 'Blade Chord (m)',    type: 'number', default: 0.4, min: 0.05, max: 2 },
+        twist:    { label: 'Blade Twist (°)',    type: 'number', default: -10, min: -20, max: 0 },
+        taper:    { label: 'Taper Ratio',        type: 'number', default: 0.7, min: 0.3, max: 1 },
+        hubR:     { label: 'Hub Radius (m)',     type: 'number', default: 0.3, min: 0.05, max: 1 },
+      },
+    },
+    {
+      id: 'tail-rotor', name: 'Tail Rotor',
+      params: {
+        radius:  { label: 'Radius (m)',  type: 'number', default: 1.0, min: 0.1, max: 5 },
+        nBlades: { label: 'Blades',     type: 'number', default: 2,   min: 2,   max: 6 },
+        chord:   { label: 'Chord (m)',  type: 'number', default: 0.15, min: 0.02, max: 0.5 },
+      },
+    },
+    {
+      id: 'helicopter-fuselage', name: 'Helicopter Fuselage',
+      params: {
+        length:  { label: 'Length (m)',  type: 'number', default: 9.0,  min: 1, max: 30 },
+        width:   { label: 'Width (m)',   type: 'number', default: 1.8,  min: 0.2, max: 5 },
+        height:  { label: 'Height (m)', type: 'number', default: 2.2,  min: 0.2, max: 6 },
+        tailLen: { label: 'Tail Boom Length (m)', type: 'number', default: 4, min: 1, max: 12 },
+      },
+    },
+    {
+      id: 'propeller', name: 'Propeller / Prop Disk',
+      params: {
+        diameter: { label: 'Diameter (m)',  type: 'number', default: 2.0, min: 0.1, max: 10 },
+        nBlades:  { label: 'Blades',        type: 'number', default: 2,   min: 2,   max: 6 },
+        pitch:    { label: 'Pitch (m)',     type: 'number', default: 1.5, min: 0.1, max: 8 },
+        chord:    { label: 'Root Chord (m)', type: 'number', default: 0.15, min: 0.01, max: 1 },
+      },
+    },
+  ],
+  'Marine & Submarine': [
+    {
+      id: 'submarine-hull', name: 'Submarine Hull',
+      params: {
+        length:    { label: 'Length (m)',     type: 'number', default: 80, min: 5, max: 200 },
+        diameter:  { label: 'Diameter (m)',   type: 'number', default: 8,  min: 0.5, max: 20 },
+        noseRatio: { label: 'Nose Ratio',     type: 'number', default: 0.15, min: 0.05, max: 0.3 },
+        sternType: { label: 'Stern Type', type: 'select', default: 'albacore', options: ['albacore','cruciform','X-stern'] },
+        segs:      { label: 'Segments', type: 'number', default: 32, min: 8, max: 64 },
+      },
+    },
+    {
+      id: 'torpedo', name: 'Torpedo',
+      params: {
+        length:   { label: 'Length (m)',    type: 'number', default: 6.0,  min: 1, max: 10 },
+        diameter: { label: 'Diameter (m)',  type: 'number', default: 0.533, min: 0.1, max: 1 },
+        nFins:    { label: 'Fins',          type: 'number', default: 4, min: 2, max: 6 },
+      },
+    },
+    {
+      id: 'hydrofoil', name: 'Hydrofoil',
+      params: {
+        span:      { label: 'Span (m)',     type: 'number', default: 3,  min: 0.1, max: 10 },
+        chord:     { label: 'Chord (m)',    type: 'number', default: 0.6, min: 0.05, max: 3 },
+        thickness: { label: 'Thickness (m)', type: 'number', default: 0.06, min: 0.005, max: 0.5 },
+        sweep:     { label: 'Sweep (°)',    type: 'number', default: 20, min: 0, max: 60 },
+      },
+    },
+  ],
+  'Structures & Frames': [
+    {
+      id: 'truss-frame', name: 'Space Truss Frame',
+      params: {
+        width:  { label: 'Width (m)',   type: 'number', default: 2,  min: 0.1, max: 20 },
+        height: { label: 'Height (m)', type: 'number', default: 2,  min: 0.1, max: 20 },
+        length: { label: 'Length (m)', type: 'number', default: 6,  min: 0.1, max: 50 },
+        nBays:  { label: 'Bays',       type: 'number', default: 4,  min: 1, max: 20 },
+        tubeR:  { label: 'Tube Radius (m)', type: 'number', default: 0.05, min: 0.005, max: 0.3 },
+      },
+    },
+    {
+      id: 'bulkhead', name: 'Pressure Bulkhead',
+      params: {
+        radius:     { label: 'Radius (m)',     type: 'number', default: 2.0,   min: 0.1, max: 10 },
+        thickness:  { label: 'Thickness (m)',  type: 'number', default: 0.012, min: 0.001, max: 0.1 },
+        curvature:  { label: 'Dome Height (m)', type: 'number', default: 0.5,  min: 0, max: 3 },
+        nHoles:     { label: 'Access Holes',   type: 'number', default: 0, min: 0, max: 6 },
+      },
+    },
+    {
+      id: 'i-beam', name: 'I-Beam / H-Section',
+      params: {
+        length:  { label: 'Length (m)',    type: 'number', default: 5,   min: 0.1, max: 50 },
+        height:  { label: 'Height (m)',    type: 'number', default: 0.3, min: 0.01, max: 2 },
+        width:   { label: 'Flange (m)',    type: 'number', default: 0.15, min: 0.01, max: 1 },
+        tw:      { label: 'Web thick (m)', type: 'number', default: 0.01, min: 0.001, max: 0.1 },
+        tf:      { label: 'Flange thick (m)', type: 'number', default: 0.015, min: 0.001, max: 0.1 },
+      },
+    },
+    {
+      id: 'longerons', name: 'Longeron Assembly',
+      params: {
+        length:  { label: 'Length (m)',  type: 'number', default: 10,  min: 0.5, max: 100 },
+        width:   { label: 'Width (m)',   type: 'number', default: 2,   min: 0.1, max: 10 },
+        height:  { label: 'Height (m)', type: 'number', default: 1.5, min: 0.1, max: 10 },
+        nLon:    { label: 'Longerons',  type: 'number', default: 4, min: 3, max: 8 },
+        nFrames: { label: 'Frames',     type: 'number', default: 6, min: 2, max: 20 },
+      },
+    },
+  ],
   'Primitives': [
     {
       id: 'box', name: 'Box',
