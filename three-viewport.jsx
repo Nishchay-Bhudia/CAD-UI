@@ -525,6 +525,26 @@ export default function ThreeViewport({ onCoordsChange }) {
       mesh.userData.featureId = feature.id
       mesh.castShadow = true
       mesh.receiveShadow = true
+
+      // Apply transform (position / rotation / scale)
+      if (feature.position) {
+        mesh.position.set(feature.position[0] || 0, feature.position[1] || 0, feature.position[2] || 0)
+      }
+      if (feature.rotation) {
+        const d = Math.PI / 180
+        mesh.rotation.set(
+          (feature.rotation[0] || 0) * d,
+          (feature.rotation[1] || 0) * d,
+          (feature.rotation[2] || 0) * d
+        )
+      }
+      if (feature.scale) {
+        const sx = feature.scale[0] || 1
+        const sy = feature.scale[1] || 1
+        const sz = feature.scale[2] || 1
+        mesh.scale.set(sx, sy, sz)
+      }
+
       scene.add(mesh)
       meshMapRef.current[feature.id] = mesh
     })
