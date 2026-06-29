@@ -2,7 +2,7 @@
 // AeroForge CAD — Main Application UI
 // ============================================================
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   LineChart, Line, BarChart, Bar, ScatterChart, Scatter,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine
@@ -291,8 +291,20 @@ function FeatureTree() {
 }
 
 // ── Properties Panel ─────────────────────────────────────────
+function TransformInput({ label, value, onChange, axisClass }) {
+  return (
+    <input
+      type="number" step="0.1"
+      className={`prop-input text-center ${axisClass}`}
+      style={{padding:'2px 4px', fontSize:11}}
+      value={typeof value === 'number' ? value : 0}
+      onChange={e => onChange(parseFloat(e.target.value) || 0)}
+    />
+  )
+}
+
 function PropertiesPanel() {
-  const { getSelectedFeature, getSelectedMaterial, updateFeatureParams, updateFeatureMaterial } = useStore()
+  const { getSelectedFeature, getSelectedMaterial, updateFeatureParams, updateFeatureMaterial, updateFeatureTransform } = useStore()
   const feature = getSelectedFeature()
   const material = getSelectedMaterial()
 
@@ -340,6 +352,32 @@ function PropertiesPanel() {
             </div>
           ))
         )}
+      </Section>
+
+      <Section title="Transform">
+        <div className="text-xs text-slate-500 mb-1 flex gap-2">
+          <span className="w-16 text-center">X</span>
+          <span className="w-16 text-center">Y</span>
+          <span className="w-16 text-center">Z</span>
+        </div>
+        {[
+          { label: 'Position', field: 'position', unit: 'm' },
+          { label: 'Rotation', field: 'rotation', unit: '°' },
+          { label: 'Scale',    field: 'scale',    unit: '×' },
+        ].map(({ label, field, unit }) => (
+          <div key={field} className="prop-row items-center">
+            <span className="prop-label text-xs">{label} <span className="text-slate-600">{unit}</span></span>
+            <div className="flex gap-1 flex-1">
+              {[0,1,2].map(ax => (
+                <TransformInput key={ax}
+                  value={(feature[field] || (field==='scale'?[1,1,1]:[0,0,0]))[ax]}
+                  axisClass={['transform-axis-x','transform-axis-y','transform-axis-z'][ax]}
+                  onChange={v => updateFeatureTransform(feature.id, field, ax, v)}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
       </Section>
 
       <Section title="Material">
@@ -1410,6 +1448,79 @@ function ExportDialog({ onClose }) {
   )
 }
 
+// ── Import Dialog ─────────────────────────────────────────────
+function ImportDialog({ onClose }) {
+  const { loadModel } = useStore()
+  const [error, setError] = useState(null)
+  const [preview, setPreview] = useState(null)
+  const fileRef = useRef(null)
+
+  const handleFile = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result)
+        if (!Array.isArray(data.features)) throw new Error('No feature list found — is this an AeroForge export?')
+        setPreview(data)
+        setError(null)
+      } catch(err) {
+        setError(err.message)
+        setPreview(null)
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  const doImport = () => {
+    if (!preview) return
+    loadModel(preview)
+    onClose()
+  }
+
+  return (
+    <div className="dialog-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="dialog fade-in" style={{minWidth:420}}>
+        <div className="dialog-header">
+          Import Model
+          <button className="btn btn-ghost py-0.5 px-2" onClick={onClose}><Icon d={icons.x} size={14}/></button>
+        </div>
+        <div className="dialog-body">
+          <p className="text-xs text-slate-500 mb-4">Load a <code>.aeroforge</code> or <code>.json</code> file exported from AeroForge.</p>
+          <label className="drop-zone cursor-pointer" onClick={()=>fileRef.current?.click()}>
+            <Icon d={icons.upload} size={28} className="text-slate-500" />
+            <div className="text-sm" style={{color:'var(--c-text2)'}}>Click to choose file</div>
+            <div className="text-xs text-slate-600">.aeroforge · .json</div>
+            <input ref={fileRef} type="file" accept=".aeroforge,.json,application/json" className="hidden" onChange={handleFile} />
+          </label>
+          {error && (
+            <div className="mt-3 text-xs text-red-400 p-2 rounded border border-red-800" style={{background:'#2d0b0b'}}>
+              ✕ {error}
+            </div>
+          )}
+          {preview && (
+            <div className="mt-3 result-card">
+              <div className="text-xs font-semibold text-sky-400 mb-1">✔ Ready to import</div>
+              <div className="text-xs" style={{color:'var(--c-text2)'}}>{preview.name}</div>
+              <div className="text-xs text-slate-500">
+                {preview.features?.length} features
+                {preview.exportedAt ? ` · exported ${new Date(preview.exportedAt).toLocaleDateString()}` : ''}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="dialog-footer">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={doImport} disabled={!preview}>
+            <Icon d={icons.upload} size={14} />Import
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Shortcuts Dialog ──────────────────────────────────────────
 function ShortcutsDialog({ onClose }) {
   const [search, setSearch] = useState('')
@@ -1765,6 +1876,7 @@ export default function App() {
   const [coords, setCoords] = useState([0,0,0])
 
   useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
@@ -1802,9 +1914,10 @@ export default function App() {
 
       {/* Dialogs */}
       {activeDialog === 'component-lib' && <ComponentLibraryDialog onClose={closeDialog} />}
-      {activeDialog === 'export' && <ExportDialog onClose={closeDialog} />}
-      {activeDialog === 'shortcuts' && <ShortcutsDialog onClose={closeDialog} />}
-      {activeDialog === 'auth' && <AuthDialog onClose={closeDialog} />}
+      {activeDialog === 'export'        && <ExportDialog onClose={closeDialog} />}
+      {activeDialog === 'import'        && <ImportDialog onClose={closeDialog} />}
+      {activeDialog === 'shortcuts'     && <ShortcutsDialog onClose={closeDialog} />}
+      {activeDialog === 'auth'          && <AuthDialog onClose={closeDialog} />}
       {activeDialog === 'about' && (
         <div className="dialog-overlay" onClick={closeDialog}>
           <div className="dialog fade-in" style={{maxWidth:420}}>
